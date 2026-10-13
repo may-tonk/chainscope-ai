@@ -1,0 +1,8 @@
+{
+  "source_path": "token_transfers_rpc.csv (previous collection project)",
+  "selection": "first 20 historical normalized CSV rows",
+  "sample_count": 20,
+  "copied_on": "2026-10-12",
+  "fresh_online_collection": false,
+  "canonical_chain_revalidated": false
+}

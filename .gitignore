@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+output/
+build/
+dist/
+*.egg-info/
+logs/*
+!logs/.gitkeep
+raw/*
+.pytest_cache/
+.ruff_cache/
+.idea/
+# Local collaboration context, workstation troubleshooting and generated reports.
+AGENTS.md
+reports/*
+!reports/sample_source.json
+docs/environment.md
+docs/mysql-connection.md
+docs/collection-2026-10-12.md
+docs/W1-开发记录与代码导读.md
+docs/文件职责与采集存储流程.md
+docs/rpc-provider.md

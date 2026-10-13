@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools==77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chainscope-ai"
+version = "0.1.0"
+description = "A CLI for collecting and validating blockchain transfer data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28,<1",
+    "pymysql[rsa]>=1.1,<2",
+    "sqlalchemy>=2,<3",
+    "alembic>=1.14,<2",
+    "pydantic>=2,<3",
+    "pydantic-settings>=2,<3",
+    "python-dotenv>=1,<2",
+    "tenacity>=9,<10",
+    "rich>=13,<15",
+    "structlog>=24,<27",
+    "web3>=7,<8",
+    "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+analysis = [
+    "numpy>=2,<3",
+    "pandas>=2.2,<4",
+    "pyarrow>=18",
+    "duckdb>=1,<2",
+    "matplotlib>=3.9,<4",
+    "plotly>=6,<7",
+    "openpyxl>=3.1,<4",
+    "jupyterlab>=4,<5",
+    "ipykernel>=6,<8",
+]
+api = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.34,<1",
+]
+dev = [
+    "pip>=24,<27",
+    "setuptools==77.0.3",
+    "wheel>=0.45,<1",
+    "pytest>=8,<10",
+    "pytest-cov>=6,<8",
+    "respx>=0.22,<1",
+    "ruff>=0.11,<1",
+    "mypy>=1.15,<2",
+    "pre-commit>=4,<5",
+    "types-requests",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["python"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "BLE"]
+
+[project.scripts]
+chainscope = "chainscope.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
+include = ["chainscope", "chainscope.*"]

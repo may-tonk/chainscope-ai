@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='utf-8'?>
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="ChainScope Check" type="PythonConfigurationType" factoryName="Python">
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+      <env name="PYTHONIOENCODING" value="utf-8" />
+    <env name="PYTHONDONTWRITEBYTECODE" value="1" /></envs>
+    <option name="SDK_HOME" value="$PROJECT_DIR$/.venv/Scripts/python.exe" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="IS_MODULE_SDK" value="false" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="SCRIPT_NAME" value="chainscope" />
+    <option name="PARAMETERS" value="check" />
+    <option name="MODULE_MODE" value="true" />
+    <method v="2" />
+  </configuration>
+</component>
