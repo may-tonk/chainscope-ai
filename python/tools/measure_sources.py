@@ -25,10 +25,8 @@ from chainscope.validator import TRANSFER_TOPIC
 
 BEIJING = timezone(timedelta(hours=8))
 ZERO_ADDRESS = "0x" + "0" * 40
-BEM_CANDIDATES = (
-    "0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a",
-    "0x291701ddb2e703787c982d981fb675bd0427f0e8",
-)
+# BEM contract confirmed by the user on 2026-10-15.
+BEM_CANDIDATES = ("0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a",)
 # USDT is only a load test: the densest BSC token, never stored or tracked.
 USDT = "0x55d398326f99059ff775485246999027b3197955"
 TARGET_EVENTS = 100_000_000
@@ -900,7 +898,7 @@ def main() -> int:
         "--bem",
         type=contract_address,
         action="append",
-        help="BEM 合约地址，可重复；默认两个候选",
+        help="BEM 合约地址，可重复；默认已确认的 BEM 合约",
     )
     parser.add_argument(
         "--usdt-hours",
