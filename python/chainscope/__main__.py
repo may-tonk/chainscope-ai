@@ -21,15 +21,23 @@ from .database import (
 from .dex import inspect_pool, load_pools, save_pools, set_pool_enabled
 from .errors import ChainScopeError
 from .holders import import_labels, top_holders, verify_holders
-from .jobs import job_lock, job_status, load_job, verify_job
+from .jobs import job_lock, load_job, verify_job
 from .market import Http, snapshot_market
 from .parser import quantity
 from .pipeline import run_collection
 from .query import query_job
+from .query import report as storage_report
 from .records import inspect_csv
 from .rpc_client import RpcClient
 from .sqd import DEFAULT_DATASET, DEFAULT_PORTAL, Portal
-from .sync import create, pools_discover, redo_job, run_recheck, run_sync
+from .sync import (
+    create,
+    pools_discover,
+    redo_job,
+    run_recheck,
+    run_sync,
+    status_with_head,
+)
 
 
 def main() -> int:
@@ -81,6 +89,16 @@ def main() -> int:
         "--start-block", type=int, help="起始区块；省略时用 eth_getCode 查找部署区块"
     )
     job.add_argument(
+        "--from",
+        dest="from_time",
+        help="按北京时间指定起点（如 2026-10-01T08:00，整秒），与 --start-block 二选一",
+    )
+    job.add_argument(
+        "--to",
+        dest="to_time",
+        help="按北京时间指定终点（不包含，不能晚于现在）；省略则持续跟随最新确认区块",
+    )
+    job.add_argument(
         "--window-size", type=int, default=50_000, help="每个窗口的区块数，默认 50000"
     )
     sync = commands.add_parser(
@@ -88,15 +106,29 @@ def main() -> int:
     )
     sync.add_argument("--job", default="bem")
     sync.add_argument("--max-windows", type=int, help="本次最多处理的窗口数")
-    sync.add_argument("--max-minutes", type=float, help="本次运行时间上限（分钟）")
     sync.add_argument(
         "--event-limit",
         type=int,
         default=50_000,
         help="单个窗口最多事件数，超过则自动拆分窗口",
     )
-    sync.add_argument("--max-requests", type=int, help="本次 HTTP 请求总数上限")
-    sync.add_argument("--max-cu", type=int, help="本次 Alchemy 计算单元上限（估算）")
+    sync.add_argument(
+        "--block-hard-limit",
+        type=int,
+        default=50_000,
+        help="单个区块（Transfer+Swap）最多条数，超过则隔离该区块，默认 50000",
+    )
+    sync.add_argument(
+        "--max-requests", type=int, help="本次 HTTP 请求数软上限（在窗口之间检查）"
+    )
+    sync.add_argument(
+        "--max-cu", type=int, help="本次 Alchemy 计算单元软上限（估算，窗口之间检查）"
+    )
+    sync.add_argument(
+        "--max-minutes",
+        type=float,
+        help="本次运行时间软上限（分钟）；当前窗口会做完，超出部分记入 budget_overrun_seconds",
+    )
     sync.add_argument(
         "--no-reconcile",
         action="store_true",
@@ -110,7 +142,8 @@ def main() -> int:
     status.add_argument(
         "--max-lag-blocks",
         type=int,
-        help="水位落后超过该区块数时以退出码 2 结束（约 0.45 秒一块）",
+        help="与刚读取的最终确认高度相比，落后超过该区块数时退出码 2；"
+        "读不到高度时退出码 4",
     )
     recheck = commands.add_parser(
         "recheck", help="随机复查已完成窗口；有变化的窗口标为失败并回退水位"
@@ -190,11 +223,19 @@ def main() -> int:
                 args.job,
                 args.token,
                 start_block=args.start_block,
+                from_time=args.from_time,
+                to_time=args.to_time,
                 window_size=args.window_size,
             )
         elif args.command == "sync":
-            if args.event_limit < 1 or (args.max_windows or 1) < 1:
-                raise ChainScopeError("窗口数和事件上限必须为正数")
+            if (
+                args.event_limit < 1
+                or (args.max_windows or 1) < 1
+                or args.block_hard_limit < args.event_limit
+            ):
+                raise ChainScopeError(
+                    "窗口数和事件上限必须为正数，单区块上限不能小于事件上限"
+                )
             result = run_sync(
                 load_settings(),
                 args.job,
@@ -205,7 +246,9 @@ def main() -> int:
                 max_requests=args.max_requests,
                 max_compute_units=args.max_cu,
                 event_limit=args.event_limit,
+                block_hard_limit=args.block_hard_limit,
             )
+            code = 3 if result.get("quarantined") else 0
         elif args.command == "recheck":
             result = run_recheck(
                 load_settings(),
@@ -217,6 +260,18 @@ def main() -> int:
             code = 0 if result["ok"] else 3
         elif args.command in ("pools", "holders-verify", "market"):
             result, code = run_with_sources(args)
+        elif args.command == "status":
+            settings = load_settings()
+            engine = engine_for(settings)
+            try:
+                with httpx.Client(timeout=httpx.Timeout(30, connect=10)) as http:
+                    portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+                    result = status_with_head(
+                        engine, args.job, portal, max_lag_blocks=args.max_lag_blocks
+                    )
+            finally:
+                engine.dispose()
+            code = {True: 2, "unknown": 4}.get(result["behind"], 0)
         elif args.command == "query":
             settings = load_settings()
             engine = engine_for(settings)
@@ -244,17 +299,12 @@ def main() -> int:
             try:
                 if args.command == "verify":
                     result = verify_batch(engine, args.batch_id)
-                elif args.command == "status":
-                    result = job_status(
-                        engine, args.job, max_lag_blocks=args.max_lag_blocks
-                    )
-                    code = 2 if result["behind"] else 0
                 elif args.command == "redo":
                     result = redo_job(
                         engine, args.job, first=args.from_block, last=args.to_block
                     )
                 elif args.command == "report":
-                    result = report(engine, args.job)
+                    result = storage_report(engine, args.job)
                 elif args.command == "verify-job":
                     result = verify_job(engine, args.job)
                     code = 0 if result["ok"] else 3
@@ -341,12 +391,17 @@ def run_with_sources(args) -> tuple[dict, int]:
                 with RpcClient(settings.require_rpc()) as rpc:
                     row = inspect_pool(rpc, job["token_address"], pool)
                 row["created_block"] = args.created_block or job["start_block"]
-                added = save_pools(
-                    engine, args.job, [row], "manual", enable_known=False
-                )
-                if not added:
+                with job_lock(engine, args.job):
+                    saved = save_pools(
+                        engine, args.job, [row], "manual", enable_known=False
+                    )
+                if not saved["added"]:
                     raise ChainScopeError("该池子已存在；用 pools enable 启用")
-                return {"added": added[0], "next": "确认无误后执行 pools enable"}, 0
+                return {
+                    "added": saved["added"][0],
+                    "windows_reset": saved["windows_reset"],
+                    "next": "池子默认停用；确认无误后执行 pools enable，下次 sync 回补",
+                }, 0
             with job_lock(engine, args.job):
                 result = set_pool_enabled(
                     engine, args.job, pool, args.action == "enable"

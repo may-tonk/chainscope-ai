@@ -188,14 +188,15 @@ def test_parse_time_and_coverage_rules():
     assert parse_time("2026-10-01T00:00+00:00").utcoffset().total_seconds() == 0
     with pytest.raises(ChainScopeError, match="时间格式"):
         parse_time("10/01/2026")
-    job = {"start_block": 100, "verified_through": 200}
+    job = {"start_block": 100, "verified_through": 200, "deploy_block": 100}
     assert coverage(job, 150, 180)["state"] == "complete"
     assert coverage(job, 150, 250)["state"] == "partial"
     assert coverage(job, 300, 400)["state"] == "none"
-    assert coverage(job, 10, 50)["state"] == "complete"  # before deployment
+    # Before deployment is proven empty by eth_getCode, so it counts as known.
+    early = coverage(job, 10, 50)
+    assert early["state"] == "complete" and early["counted_blocks"] is None
     assert (
-        coverage({"start_block": 100, "verified_through": None}, 100, 120)["state"]
-        == "none"
+        coverage({**job, "verified_through": None}, 100, 120)["state"] == "none"
     )
 
 
@@ -228,17 +229,25 @@ def test_reconcile_mismatch_records_diffs_and_holds_watermark(mysql_engine):
     alchemy = Alchemy(chain, finalized=24)
     alchemy.drop.add((17, 1))
     with alchemy.client() as rpc:
-        with pytest.raises(ChainScopeError, match="不一致"):
-            run(engine, chain, rpc)
-    assert window_rows(engine)[:2] == [(10, 14, "done"), (15, 19, "failed")]
+        summary = run(engine, chain, rpc)
+    # The mismatched window is quarantined; later windows are still collected
+    # but the watermark stays before the gap.
+    assert [q["error_type"] for q in summary["quarantined"]] == ["ReconcileMismatch"]
+    assert window_rows(engine) == [
+        (10, 14, "done"),
+        (15, 19, "failed"),
+        (20, 24, "done"),
+    ]
     assert job_status(engine, "bem")["verified_through"] == 14
     with engine.connect() as connection:
         diff = connection.execute(sa.select(window_diffs)).mappings().one()
     assert diff["kind"] == "missing_in_alchemy" and diff["log_index"] == 1
     # The window's events were not committed.
-    assert count(engine, transfers) == 1
+    assert count(engine, transfers) == 2
     alchemy.drop.clear()
     with alchemy.client() as rpc:
+        assert run(engine, chain, rpc)["windows_done"] == 0  # not retried blindly
+        redo_job(engine, "bem", first=15, last=19)  # after investigation
         run(engine, chain, rpc)
     assert job_status(engine, "bem")["verified_through"] == 24
 
@@ -258,6 +267,10 @@ def test_recheck_finds_a_changed_window_and_rewinds(mysql_engine):
     )
     assert result["changed_windows"] == [{"window": [15, 19], "diffs": 1}]
     assert job_status(engine, "bem")["verified_through"] == 14
+    # Finalized data that changed is kept as evidence and quarantined.
+    run(engine, chain)
+    assert job_status(engine, "bem")["verified_through"] == 14
+    redo_job(engine, "bem", first=15, last=19)
     run(engine, chain)
     assert job_status(engine, "bem")["verified_through"] == 24
     assert count(engine, transfers) == 4
@@ -312,7 +325,8 @@ def test_query_by_time_reports_partial_coverage(mysql_engine):
     assert query_job(engine, TimePortal(), "bem", at(10), at(17))["events"] == 2
     partial = query_job(engine, TimePortal(), "bem", at(15), at(40))
     assert partial["coverage"]["state"] == "partial"
-    assert partial["coverage"]["covered_through_block"] == 19
+    assert partial["coverage"]["counted_blocks"] == [15, 19]
+    assert partial["events"] == 1
 
 
 @requires_mysql
@@ -320,11 +334,14 @@ def test_verify_job_report_and_full_schema_check(mysql_engine):
     engine = mysql_engine
     new_job(engine)
     run(engine, Chain(14, {11: 2}))
-    assert verify_job(engine, "bem") == {
+    checked = verify_job(engine, "bem")
+    assert {k: v for k, v in checked.items() if k != "scope"} == {
         "job_id": "bem",
         "windows_checked": 1,
         "events": 2,
+        "fingerprint_versions": [2],
         "mismatched_windows": [],
+        "blocks_with_conflicting_header": [],
         "ok": True,
     }
     with engine.begin() as connection:
@@ -381,10 +398,15 @@ def test_status_flags_lag_and_budget_stops(mysql_engine):
     chain = Chain(24, {})
     summary = run(engine, chain, max_requests=2)
     assert summary["stopped"] == "max_requests"
-    status = job_status(engine, "bem", max_lag_blocks=5)
-    assert status["behind"] is True
+    status = job_status(engine, "bem", max_lag_blocks=5, head=24)
+    assert status["behind"] is True and status["lag_blocks"] == 10
+    # Without a live head the lag is unknown, not computed from an old height.
+    unknown = job_status(engine, "bem", max_lag_blocks=5)
+    assert unknown["behind"] == "unknown" and unknown["lag_blocks"] is None
     run(engine, chain)
-    assert job_status(engine, "bem", max_lag_blocks=5)["behind"] is False
+    assert job_status(engine, "bem", max_lag_blocks=5, head=24)["behind"] is False
+    # The chain moves on: the same job is now behind the live head.
+    assert job_status(engine, "bem", max_lag_blocks=5, head=40)["behind"] is True
 
 
 @requires_mysql

@@ -1,56 +1,38 @@
 """Balances rebuilt from collected Transfers, top holders, labels and checks.
 
-address_balances is a cache of the sum of every Transfer from the job's start
-block up to scan_jobs.balances_through, which never passes verified_through.
-It advances by block range, so each Transfer is counted exactly once whatever
-the window history; a rewind below the mark forces a full rebuild.
+address_balances is a cache of the job's verified Transfers (those linked to
+its done windows) from the start block up to scan_jobs.balances_through, which
+never passes verified_through. It advances by block range in chunks; every
+chunk is one transaction that locks the job row, so concurrent refreshes and
+retries cannot add the same range twice. A watermark rewind corrects it in the
+same transaction (see jobs._rewind).
 """
 
 import re
+import time
 import tomllib
 from decimal import Decimal
 from pathlib import Path
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.mysql import insert as upsert
+from sqlalchemy.exc import OperationalError
 
+from . import balances as ledger
 from .database import utcnow
 from .errors import ChainScopeError
-from .jobs import load_job
-from .models import address_info, balances, jobs, labels, pools, transfers
+from .jobs import RETRYABLE, load_job
+from .models import address_info, balances, jobs, labels, pools
 from .parser import ADDRESS, fixed_hex, quantity
 
-ZERO = "0x" + "0" * 40
-DECIMAL_DIGITS = 65  # DECIMAL(65, 0), MySQL's widest exact type
+ZERO = ledger.ZERO
 TOTAL_SUPPLY, BALANCE_OF = "0x18160ddd", "0x70a08231"
 CATEGORIES = {"cex", "dex", "team", "burn", "contract", "bridge", "other"}
+# About a day of BSC blocks per transaction keeps row locks short.
+REFRESH_CHUNK_BLOCKS = 200_000
 
-LEGS = """
-    SELECT to_address AS holder, CAST(amount_raw AS DECIMAL(65,0)) AS delta,
-           block_number AS seen
-    FROM transfer_events
-    WHERE chain_id = 56 AND token_address = :token
-      AND block_number BETWEEN :first AND :last
-    UNION ALL
-    SELECT from_address, -CAST(amount_raw AS DECIMAL(65,0)), block_number
-    FROM transfer_events
-    WHERE chain_id = 56 AND token_address = :token
-      AND block_number BETWEEN :first AND :last
-"""
-UPSERT = f"""
-INSERT INTO address_balances (chain_id, token_address, address, balance_raw, last_block)
-SELECT 56, :token, holder, delta_sum, seen_block FROM (
-    SELECT holder, SUM(delta) AS delta_sum, MAX(seen) AS seen_block
-    FROM ({LEGS}) AS legs
-    WHERE holder <> :zero
-    GROUP BY holder
-) AS d
-ON DUPLICATE KEY UPDATE
-    balance_raw = balance_raw + delta_sum,
-    last_block = GREATEST(last_block, seen_block)
-"""
 AT_BLOCK = f"""
-SELECT holder, SUM(delta) AS balance FROM ({LEGS}) AS legs
+SELECT holder, SUM(delta) AS balance FROM ({ledger.LEGS}) AS legs
 WHERE holder <> :zero
 GROUP BY holder
 HAVING balance > 0
@@ -59,52 +41,85 @@ LIMIT :top
 """
 AT_BLOCK_TOTALS = f"""
 SELECT COUNT(*), COALESCE(SUM(balance), 0), SUM(balance < 0) FROM (
-    SELECT holder, SUM(delta) AS balance FROM ({LEGS}) AS legs
+    SELECT holder, SUM(delta) AS balance FROM ({ledger.LEGS}) AS legs
     WHERE holder <> :zero GROUP BY holder HAVING balance <> 0
 ) AS b
 """
 
 
-def refresh_balances(engine, job_id: str) -> dict:
-    """Bring address_balances up to verified_through in one transaction."""
+def _refresh_step(engine, job_id: str, chunk: int) -> dict:
+    """Add one chunk of verified blocks to the balances, atomically."""
     with engine.begin() as connection:
-        job = load_job(connection, job_id)
+        job = load_job(connection, job_id, lock=True)
         through, mark = job["verified_through"], job["balances_through"]
-        token = job["token_address"]
-        if through is None:
-            return {"balances_through": None, "note": "还没有已核验的窗口"}
-        if mark is not None and mark >= through:
-            return {"balances_through": mark, "blocks_added": 0}
-        longest = connection.scalar(
-            sa.select(sa.func.max(transfers.c.amount_len)).where(
-                transfers.c.chain_id == 56, transfers.c.token_address == token
-            )
-        )
-        if longest is not None and longest > DECIMAL_DIGITS:
-            raise ChainScopeError(
-                "存在超过 65 位的转账金额，MySQL DECIMAL 无法精确累计持仓"
-            )
+        if through is None or (mark is not None and mark >= through):
+            return {"done": True, "mark": mark}
         rebuilt = mark is None
         if rebuilt:
-            connection.execute(
-                balances.delete().where(
-                    balances.c.chain_id == 56, balances.c.token_address == token
-                )
-            )
+            ledger.clear(connection, job["token_address"])
         first = job["start_block"] if rebuilt else mark + 1
+        last = min(through, first + chunk - 1)
+        ledger.apply_range(connection, job, first, last, 1)
         connection.execute(
-            sa.text(UPSERT),
-            {"token": token, "first": first, "last": through, "zero": ZERO},
-        )
-        connection.execute(
-            jobs.update()
-            .where(jobs.c.job_id == job_id)
-            .values(balances_through=through)
+            jobs.update().where(jobs.c.job_id == job_id).values(balances_through=last)
         )
     return {
-        "balances_through": through,
+        "done": last >= through,
+        "mark": last,
         "rebuilt": rebuilt,
-        "blocks_added": through - first + 1,
+        "blocks": last - first + 1,
+    }
+
+
+def refresh_balances(
+    engine,
+    job_id: str,
+    *,
+    chunk: int = REFRESH_CHUNK_BLOCKS,
+    stop=None,
+    sleep=time.sleep,
+) -> dict:
+    """Bring address_balances up to verified_through, chunk by chunk.
+
+    stop: optional callable; when it returns true the refresh pauses between
+    chunks and the next call continues from the saved mark.
+    """
+    added, rebuilt, retries = 0, False, 0
+    while True:
+        try:
+            step = _refresh_step(engine, job_id, chunk)
+        except OperationalError as exc:
+            code = exc.orig.args[0] if exc.orig is not None and exc.orig.args else None
+            # The step is one transaction, so running it again cannot double count.
+            if code not in RETRYABLE or retries >= 3:
+                raise
+            retries += 1
+            sleep(2**retries)
+            continue
+        added += step.get("blocks", 0)
+        rebuilt = rebuilt or step.get("rebuilt", False)
+        if step["done"]:
+            break
+        if stop is not None and stop():
+            return {
+                "balances_through": step["mark"],
+                "blocks_added": added,
+                "rebuilt": rebuilt,
+                "complete": False,
+            }
+    with engine.connect() as connection:
+        job = load_job(connection, job_id)
+    if job["verified_through"] is None:
+        return {
+            "balances_through": None,
+            "note": "还没有已核验的窗口",
+            "complete": True,
+        }
+    return {
+        "balances_through": job["balances_through"],
+        "blocks_added": added,
+        "rebuilt": rebuilt,
+        "complete": True,
     }
 
 
@@ -170,12 +185,13 @@ def top_holders(
     if not 1 <= top <= 1000:
         raise ChainScopeError("top 需在 1 到 1000 之间")
     if at_block is None:
-        refreshed = refresh_balances(engine, job_id)
+        refresh_balances(engine, job_id)
+    # One read transaction: the mark and the rows come from the same snapshot.
     with engine.connect() as connection:
         job = load_job(connection, job_id)
         token, decimals = job["token_address"], job["token_decimals"]
         if at_block is None:
-            as_of = refreshed["balances_through"]
+            as_of = job["balances_through"]
             if as_of is None:
                 raise ChainScopeError("任务还没有已核验的窗口，无法统计持仓")
             where = [balances.c.chain_id == 56, balances.c.token_address == token]
@@ -201,11 +217,10 @@ def top_holders(
                     f"区块 {at_block} 不在已核验范围内（{job['start_block']}–{through}）"
                 )
             as_of = at_block
+            ledger.capacity(connection, job)
             params = {
-                "token": token,
-                "first": job["start_block"],
-                "last": at_block,
-                "zero": ZERO,
+                **ledger.range_params(job, job["start_block"], at_block),
+                "window_first": job["start_block"],
                 "top": top,
             }
             rows = connection.execute(sa.text(AT_BLOCK), params).all()
@@ -235,7 +250,11 @@ def top_holders(
         "net_supply_raw": str(supply),
         "net_supply": tokens(supply, decimals),
         "negative_balances": int(negative or 0),
-        "note": "持仓由已采集的 Transfer 累加得到；负余额表示数据缺口或非标准代币",
+        # Balances are only whole if collection started at the deploy block.
+        "history_complete": job["deploy_block"] is not None
+        and job["start_block"] <= job["deploy_block"],
+        "note": "持仓由已核验窗口的 Transfer 累加得到；负余额表示数据缺口或非标准代币；"
+        "history_complete 为 false 时起点晚于部署，余额不完整",
         "top": ranked,
     }
 

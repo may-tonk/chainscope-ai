@@ -296,25 +296,54 @@ def compare(sqd: Tally, alchemy: Tally) -> dict:
     }
 
 
-def density(tally: Tally) -> dict:
-    days = sorted(tally.days)
-    # The first and last day of the range are partial; leave them out of averages.
-    full = days[1:-1]
+def density(tally: Tally, start_time: int, end_time: int) -> dict:
+    """Daily counts over Beijing calendar days, zero-event days included.
+
+    start_time and end_time are the timestamps of the first and last measured
+    blocks. A day is full only when the range covers it from 00:00:00 to
+    23:59:59; the others are partial and kept out of averages. "Last 7 days"
+    means the last seven full calendar days, not the last seven active ones.
+    """
+    first_day = datetime.fromtimestamp(start_time, BEIJING).date()
+    last_day = datetime.fromtimestamp(end_time, BEIJING).date()
+    calendar = []
+    day = first_day
+    while day <= last_day:
+        calendar.append(day)
+        day += timedelta(days=1)
+
+    def covered(day) -> bool:
+        begin = datetime(day.year, day.month, day.day, tzinfo=BEIJING).timestamp()
+        # Blocks come every second or faster, so a last block at 23:59:59 or
+        # later means the day was covered to its end.
+        return start_time <= begin and end_time >= begin + 86_399
+
+    per_day = {d.isoformat(): tally.days.get(d.isoformat(), 0) for d in calendar}
+    full = [d.isoformat() for d in calendar if covered(d)]
+    partial = [d.isoformat() for d in calendar if not covered(d)]
     recent = full[-7:]
-    return {
-        "active_days": len(days),
-        "per_day": {day: tally.days[day] for day in days},
-        "busiest_day": max(days, key=tally.days.__getitem__) if days else None,
-        "busiest_day_events": max(tally.days.values()) if days else 0,
-        "full_day_average": round(sum(tally.days[d] for d in full) / len(full))
-        if full
-        else None,
-        "last_7_full_days_average": round(
-            sum(tally.days[d] for d in recent) / len(recent)
-        )
-        if recent
-        else None,
+
+    def average(days):
+        return round(sum(per_day[d] for d in days) / len(days), 1) if days else None
+
+    result = {
+        "calendar_days": len(calendar),
+        "full_days": len(full),
+        "partial_days": partial,
+        "active_days": sum(1 for count in per_day.values() if count),
+        "zero_event_full_days": sum(1 for d in full if not per_day[d]),
+        "per_day": per_day,
+        "busiest_day": max(per_day, key=per_day.__getitem__) if tally.events else None,
+        "busiest_day_events": max(per_day.values(), default=0),
+        "full_day_average": average(full),
+        "last_7_full_days": recent,
+        "last_7_full_days_average": average(recent),
     }
+    if len(recent) < 7:
+        result["note"] = f"完整自然日只有 {len(recent)} 天，近 7 天日均按这些天计算"
+    if not full:
+        result["note"] = "没有完整自然日，不能给出日均；见 per_day 的部分日计数"
+    return result
 
 
 def sqd_transfers(
@@ -721,7 +750,11 @@ def measure_token(
     result["sqd_totals"] = full.summary()
     result["reconcile"] = compare(upto, alchemy_tally)
     result["reconcile"]["through_block"] = result["alchemy"]["covered_to_block"]
-    result["density"] = density(full)
+    result["density"] = density(
+        full,
+        header(alchemy, hex(start))["timestamp"],
+        header(alchemy, hex(end))["timestamp"],
+    )
     supply = result["token"].get("totalSupply")
     if supply is not None and how == "eth_getCode 二分查找":
         result["supply_check"] = {

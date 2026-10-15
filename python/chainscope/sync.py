@@ -16,37 +16,48 @@ from sqlalchemy.exc import SQLAlchemyError
 from .config import ROOT, Settings
 from .database import check_database, engine_for, fail_batch, start_batch
 from .dex import attribute_all, discover_pools, load_pools
-from .errors import ChainScopeError
+from .errors import ChainScopeError, DataMismatch, ReconcileMismatch
 from .holders import refresh_balances
 from .jobs import (
+    EVENT_FIELDS,
     begin_window,
     create_job,
+    expected_pool_set,
     fail_window,
     fault,
     invalidate_window,
     job_lock,
+    job_status,
     load_job,
     next_window,
     plan_windows,
+    pool_set_hash,
     record_diffs,
     recover_abandoned,
+    reset_stale_pool_windows,
     reset_windows,
     sample_done_windows,
     split_window,
     store_window,
-    window_tally,
+    window_rows,
 )
 from .parser import ADDRESS, fixed_hex, quantity
-from .reconcile import finalized_block, reconcile_window, sample_receipts
+from .query import BEIJING, parse_time
+from .reconcile import (
+    finalized_block,
+    reconcile_window,
+    sample_receipts,
+    sample_swap_receipts,
+)
 from .rpc_client import RpcClient
 from .sqd import (
+    BLOCK_HARD_LIMIT,
     DEFAULT_DATASET,
     DEFAULT_PORTAL,
     PARSER_VERSION,
     Portal,
     TooManyEvents,
     window_activity,
-    window_transfers,
 )
 from .validator import Tally
 
@@ -54,6 +65,19 @@ JOB_ID = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 DECIMALS = "0x313ce567"  # decimals()
 DEFAULT_WINDOW = 50_000
 DEFAULT_EVENT_LIMIT = 50_000
+SWAP_FIELDS = (
+    "pool_address",
+    "block_number",
+    "block_time_utc",
+    "tx_from",
+    "trader",
+    "side",
+    "token_amount_raw",
+    "quote_amount_raw",
+    "quote_token",
+    "attribution",
+    "transfer_matched",
+)
 FAILURES = (
     ChainScopeError,
     SQLAlchemyError,
@@ -104,34 +128,84 @@ def token_decimals(rpc: RpcClient, token: str, block: int) -> int | None:
         return None
 
 
+def block_time(rpc: RpcClient, block: int) -> str:
+    header = rpc.call("eth_getBlockByNumber", [hex(block), False])
+    if not isinstance(header, dict):
+        raise ChainScopeError(f"读取区块 {block} 失败")
+    stamp = quantity(header.get("timestamp"), "timestamp")
+    return datetime.fromtimestamp(stamp, BEIJING).isoformat()
+
+
 def create(
     settings: Settings,
     job_id: str,
     token: str,
     *,
     start_block: int | None = None,
+    from_time: str | None = None,
+    to_time: str | None = None,
     window_size: int = DEFAULT_WINDOW,
+    portal: Portal | None = None,
+    rpc: RpcClient | None = None,
 ) -> dict:
+    """Create a job. The range may be given as blocks or Beijing times.
+
+    Times are converted once here and shown back; the job keeps block numbers,
+    so later runs continue from saved progress and never start over.
+    """
     if not JOB_ID.fullmatch(job_id):
         raise ChainScopeError("任务名只能用小写字母开头，包含小写字母、数字、- 和 _")
+    if start_block is not None and from_time is not None:
+        raise ChainScopeError("--start-block 和 --from 只能二选一")
     token = fixed_hex(token, ADDRESS, "token")
     engine = engine_for(settings)
+    notes = []
     try:
         require_schema(engine)
-        with RpcClient(settings.require_rpc()) as rpc:
+        with ExitStack() as stack:
+            if rpc is None:
+                rpc = stack.enter_context(RpcClient(settings.require_rpc()))
             if quantity(rpc.call("eth_chainId", []), "chain_id") != 56:
                 raise ChainScopeError("RPC 不是 BSC 主网（chain_id=56）")
             head = quantity(rpc.call("eth_blockNumber", []), "head")
             if not has_code(rpc, token, head):
                 raise ChainScopeError("该地址在最新区块没有合约代码")
+            deployed = deploy_block(rpc, token, head)
+            if (from_time or to_time) and portal is None:
+                http = stack.enter_context(httpx.Client(timeout=60))
+                portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+            if from_time is not None:
+                moment = parse_time(from_time)
+                if moment > datetime.now(UTC):
+                    raise ChainScopeError("开始时间晚于现在，没有可采集的区块")
+                start_block = portal.block_at(int(moment.timestamp()))
             if start_block is None:
-                start_block = deploy_block(rpc, token, head)
-                found_by = "eth_getCode 二分查找部署区块"
-            else:
-                found_by = "手工指定"
+                start_block = deployed
+                notes.append("起点为部署区块（eth_getCode 二分查找）")
+            elif start_block < deployed:
+                notes.append(
+                    f"起点早于部署区块 {deployed}，之前没有事件，改从部署区块开始"
+                )
+                start_block = deployed
+            elif start_block > deployed:
+                notes.append(
+                    f"起点晚于部署区块 {deployed}：之前的事件不会采集，持仓不完整，"
+                    "查询这段时间会显示未采集"
+                )
+            end_block = None
+            if to_time is not None:
+                moment = parse_time(to_time)
+                if moment > datetime.now(UTC):
+                    raise ChainScopeError("结束时间晚于现在；要持续同步请省略 --to")
+                end_block = portal.block_at(int(moment.timestamp())) - 1
+                if end_block < start_block:
+                    raise ChainScopeError("结束时间早于起点（或早于部署），范围为空")
             if not 0 <= start_block <= head:
                 raise ChainScopeError("起始区块超出链高度")
             decimals = token_decimals(rpc, token, head)
+            shown = {"start_block_time_beijing": block_time(rpc, start_block)}
+            if end_block is not None:
+                shown["end_block_time_beijing"] = block_time(rpc, end_block)
             requests = rpc.requests
         row = create_job(
             engine,
@@ -142,12 +216,17 @@ def create(
             window_size=window_size,
             parser_version=PARSER_VERSION,
             decimals=decimals,
+            deploy_block=deployed,
+            end_block=end_block,
         )
     finally:
         engine.dispose()
     return {
         **{k: v for k, v in row.items() if k != "created_at_utc"},
-        "start_block_from": found_by,
+        **shown,
+        "range_rule": "[from, to)：包含开始时刻，不包含结束时刻；北京时间",
+        "follows_head": end_block is None,
+        "notes": notes,
         "rpc_requests": requests,
     }
 
@@ -168,12 +247,19 @@ def tally_of(events: list[dict]) -> Tally:
             e["from_address"],
             e["to_address"],
             e["amount"],
+            e["block_number"],
         )
     return tally
 
 
 class Budget:
-    """Stop between windows when time, request or compute-unit limits are reached."""
+    """Soft limits: checked before each window and each balance chunk.
+
+    A window or chunk that has started always finishes (or rolls back), so a
+    run can pass a limit by up to one window. The summary reports the overrun.
+    The hard stop is the scheduled task's execution time limit; anything it
+    kills is recovered on the next run.
+    """
 
     def __init__(self, clock, *, seconds=None, requests=None, compute_units=None):
         self._clock = clock
@@ -221,17 +307,27 @@ class RunLog:
 
 
 def source_head(portal: Portal, rpc: RpcClient | None, summary: dict) -> int:
-    """Finalized height of the Portal, capped by the RPC's finalized tag if any."""
+    """Finalized height. With an RPC both sources must answer; the lower wins.
+
+    There is no silent fallback: if the RPC cannot give its finalized block the
+    run stops before collecting anything. Without an RPC (--no-reconcile) the
+    summary says the height is confirmed by SQD alone.
+    """
     head = portal.finalized_head()
     summary["portal_finalized_head"] = head
-    if rpc is not None:
-        try:
-            rpc_head = finalized_block(rpc)
-            summary["rpc_finalized_head"] = rpc_head
-            head = min(head, rpc_head)
-        except ChainScopeError as exc:
-            summary["rpc_finalized_head"] = f"不可用：{exc}"
-    return head
+    if rpc is None:
+        summary["finality"] = "sqd_only"
+        return head
+    try:
+        rpc_head = finalized_block(rpc)
+    except ChainScopeError as exc:
+        raise ChainScopeError(
+            f"无法读取 RPC 的 finalized 高度（{exc}）。对账模式要求两个来源都确认，"
+            "本次不采集；请稍后重试，或明确使用 --no-reconcile（仅 SQD 确认）"
+        ) from None
+    summary["rpc_finalized_head"] = rpc_head
+    summary["finality"] = "min(sqd, rpc)"
+    return min(head, rpc_head)
 
 
 def usage(portal: Portal, rpc: RpcClient | None) -> dict:
@@ -257,6 +353,7 @@ def sync_job(
     max_requests: int | None = None,
     max_compute_units: int | None = None,
     event_limit: int = DEFAULT_EVENT_LIMIT,
+    block_hard_limit: int = BLOCK_HARD_LIMIT,
     clock=time.monotonic,
     sleep=time.sleep,
     notify=say,
@@ -266,6 +363,8 @@ def sync_job(
 
     With an RPC client every window is reconciled against Alchemy and a few
     receipts before it is committed; without one it is marked 'skipped'.
+    Windows whose data disagrees are quarantined and the run continues with
+    the next one; transient failures stop the run.
     """
     require_schema(engine)
     log = RunLog(notify, log_path)
@@ -277,25 +376,27 @@ def sync_job(
     )
     summary = {
         "job_id": job_id,
+        "parser_version": PARSER_VERSION,
         "windows_done": 0,
         "events": 0,
         "inserted": 0,
         "swaps": 0,
         "splits": 0,
+        "quarantined": [],
         "reconcile": "alchemy" if rpc is not None else "skipped",
     }
     with job_lock(engine, job_id):
         with engine.connect() as connection:
             job = load_job(connection, job_id)
+            pools = load_pools(connection, job_id)
         if job["status"] != "active":
             raise ChainScopeError(f"任务 {job_id} 已暂停")
         if job["source"] != "sqd":
             raise ChainScopeError(f"暂不支持数据源 {job['source']}")
         token = job["token_address"]
-        with engine.connect() as connection:
-            pools = load_pools(connection, job_id)
         summary["pools"] = len(pools)
         summary["recovered_abandoned"] = recover_abandoned(engine, job_id)
+        summary["pool_windows_reset"] = reset_stale_pool_windows(engine, job_id, pools)
         head = source_head(portal, rpc, summary)
         summary["source_head"] = head
         summary["planned_windows"] = plan_windows(engine, job_id, head)
@@ -320,25 +421,29 @@ def sync_job(
             tick = clock()
             try:
                 found, legs = window_activity(
-                    portal, token, start, end, event_limit, pools
+                    portal, token, start, end, event_limit, pools, block_hard_limit
                 )
                 swap_rows = attribute_all(legs, found)
                 fault("after_fetch")
                 rows = [event_row(e, job["token_decimals"]) for e in found]
                 tally = tally_of(found)
-                extra = {"reconcile": "skipped", "receipt_checked": None}
+                extra = {
+                    "reconcile": "skipped",
+                    "receipt_checked": None,
+                    "parser_version": PARSER_VERSION,
+                    "pool_set": expected_pool_set(pools, end),
+                }
                 if rpc is not None:
                     diffs = reconcile_window(rpc, token, start, end, found)
                     if diffs:
-                        record_diffs(engine, job_id, start, end, diffs)
-                        raise ChainScopeError(
-                            f"窗口 {start}-{end} 与 Alchemy 不一致：{len(diffs)} 处差异，"
-                            "已记录到 window_diffs；水位不越过此窗口"
+                        raise ReconcileMismatch(
+                            f"窗口 {start}-{end} 与 Alchemy 不一致：{len(diffs)} 处差异",
+                            diffs,
                         )
-                    extra = {
-                        "reconcile": "match",
-                        "receipt_checked": sample_receipts(rpc, rows, start),
-                    }
+                    extra["reconcile"] = "match"
+                    extra["receipt_checked"] = sample_receipts(
+                        rpc, rows, start
+                    ) + sample_swap_receipts(rpc, swap_rows, pools, start)
                 result = store_window(
                     engine,
                     job,
@@ -351,18 +456,21 @@ def sync_job(
                     extra=extra,
                     swap_rows=swap_rows,
                 )
-                stored = window_tally(engine, job_id, start)
-                if not stored.matches(
-                    tally.events, tally.amount, tally.fingerprint_bytes()
-                ):
-                    raise ChainScopeError(
-                        f"窗口 {start}-{end} 入库后读回与采集结果不一致"
-                    )
             except TooManyEvents:
                 fail_batch(engine, attempt, "TooManyEvents")
                 middle, second = split_window(engine, job_id, start, end)
                 summary["splits"] += 1
                 log({"split": [start, end], "into": [[start, middle], [second, end]]})
+                continue
+            except DataMismatch as exc:
+                # Evidence first, then quarantine; the run goes on elsewhere.
+                record_diffs(engine, job_id, start, end, exc.diffs)
+                fail_window(engine, job_id, start, exc.kind)
+                fail_batch(engine, attempt, exc.kind)
+                summary["quarantined"].append(
+                    {"window": [start, end], "error_type": exc.kind, "reason": str(exc)}
+                )
+                log({"quarantined": [start, end], "error_type": exc.kind})
                 continue
             except FAILURES as exc:
                 try:
@@ -383,6 +491,7 @@ def sync_job(
                     "events": tally.events,
                     "swaps": len(swap_rows),
                     "inserted": result.get("inserted"),
+                    "dropped_links": result.get("dropped_links"),
                     "reconcile": extra["reconcile"],
                     "receipt_checked": extra["receipt_checked"],
                     "seconds": round(clock() - tick, 2),
@@ -390,10 +499,46 @@ def sync_job(
                     "requests": portal.stats["requests"] + (rpc.requests if rpc else 0),
                 }
             )
-        summary["balances"] = refresh_balances(engine, job_id)
-    summary["elapsed_seconds"] = round(budget.elapsed(), 1)
+        try:
+            summary["balances"] = refresh_balances(
+                engine,
+                job_id,
+                stop=lambda: budget.exhausted(portal, rpc) is not None,
+                sleep=sleep,
+            )
+        except ChainScopeError as exc:
+            # Collected windows stay committed; only the balance cache waits.
+            summary["balances"] = {"complete": False, "error": str(exc)}
+    elapsed = budget.elapsed()
+    summary["elapsed_seconds"] = round(elapsed, 1)
+    if max_seconds is not None:
+        summary["budget_overrun_seconds"] = round(max(0.0, elapsed - max_seconds), 1)
     summary["usage"] = usage(portal, rpc)
     return summary
+
+
+def compare_rows(stored: dict, fetched: dict, fields, label: str) -> list[dict]:
+    """Field-by-field differences between stored rows and a fresh fetch."""
+    diffs = []
+    for key in stored.keys() | fetched.keys():
+        old, new = stored.get(key), fetched.get(key)
+        if old is None:
+            kind, detail = f"recheck_{label}_new_in_source", {}
+        elif new is None:
+            kind, detail = f"recheck_{label}_missing_in_source", {}
+        else:
+            changed = {
+                f: {"stored": str(old[f]), "fetched": str(new[f])}
+                for f in fields
+                if old[f] != new[f]
+            }
+            if not changed:
+                continue
+            kind, detail = f"recheck_{label}_changed", {"fields": changed}
+        diffs.append(
+            {"kind": kind, "tx_hash": key[0], "log_index": key[1], "detail": detail}
+        )
+    return diffs
 
 
 def recheck_job(
@@ -406,43 +551,67 @@ def recheck_job(
     seed=None,
     notify=say,
 ) -> dict:
-    """Re-fetch random done windows; a changed window is failed and redone later."""
+    """Fetch random done windows again and compare every stored field.
+
+    Transfers: all fields incl. block number, hash and time. Swaps: all fields,
+    when the window was collected with the pools enabled now. With an RPC,
+    Alchemy is compared too. A changed window is quarantined and the
+    watermark rewound; `redo` releases it after investigation.
+    """
     require_schema(engine)
     checked, changed = [], []
+    swaps_checked = swaps_skipped = 0
     with job_lock(engine, job_id):
         with engine.connect() as connection:
             job = load_job(connection, job_id)
+            pools = load_pools(connection, job_id)
         token = job["token_address"]
         for window in sample_done_windows(engine, job_id, sample, seed):
             start, end = window["start_block"], window["end_block"]
-            found = window_transfers(portal, token, start, end, 10**9)
-            now = tally_of(found)
-            diffs = []
-            if not now.matches(
-                window["event_count"], int(window["amount_sum"]), window["fingerprint"]
-            ):
-                diffs.append(
-                    {
-                        "kind": "recheck_changed",
-                        "detail": {
-                            "stored_events": window["event_count"],
-                            "portal_events": now.events,
-                            "stored_amount": window["amount_sum"],
-                            "portal_amount": str(now.amount),
-                        },
-                    }
-                )
+            current = (window["pool_set"] or pool_set_hash(())) == expected_pool_set(
+                pools, end
+            )
+            found, legs = window_activity(
+                portal, token, start, end, 10**9, pools if current else None, 10**9
+            )
+            fresh = {
+                (e["tx_hash"], e["log_index"]): event_row(e, job["token_decimals"])
+                for e in found
+            }
+            stored_events, stored_swaps = window_rows(engine, job_id, start, end)
+            diffs = compare_rows(stored_events, fresh, EVENT_FIELDS, "transfer")
+            if current:
+                fresh_swaps = {
+                    (s["tx_hash"], s["log_index"]): s
+                    for s in attribute_all(legs, found)
+                }
+                diffs += compare_rows(stored_swaps, fresh_swaps, SWAP_FIELDS, "swap")
+                swaps_checked += 1
+            else:
+                swaps_skipped += 1
             if rpc is not None:
                 diffs += reconcile_window(rpc, token, start, end, found)
             checked.append([start, end])
             if diffs:
                 record_diffs(engine, job_id, start, end, diffs)
-                invalidate_window(engine, job_id, start, "recheck_mismatch")
+                invalidate_window(engine, job_id, start, "RecheckChanged")
                 changed.append({"window": [start, end], "diffs": len(diffs)})
-                notify(f"窗口 {start}-{end} 复查发现 {len(diffs)} 处差异，已标记为失败")
+                notify(
+                    f"窗口 {start}-{end} 复查发现 {len(diffs)} 处差异，已隔离并回退水位"
+                )
     return {
         "job_id": job_id,
         "windows_checked": len(checked),
+        "checked": {
+            "transfers": "逐字段（含区块号、区块哈希、时间）",
+            "swaps": f"{swaps_checked} 个窗口逐字段"
+            + (
+                f"；{swaps_skipped} 个窗口池子集合已变化，未比对，sync 会重做"
+                if swaps_skipped
+                else ""
+            ),
+            "alchemy": rpc is not None,
+        },
         "changed_windows": changed,
         "ok": not changed,
         "usage": usage(portal, rpc),
@@ -450,6 +619,10 @@ def recheck_job(
 
 
 def redo_job(engine, job_id: str, *, first=None, last=None, below_version=None):
+    """Reset windows: below a parser version (default: the current one), or a range.
+
+    A range also releases quarantined windows in it.
+    """
     require_schema(engine)
     if first is None and last is None and below_version is None:
         below_version = PARSER_VERSION
@@ -509,27 +682,50 @@ def run_recheck(settings: Settings, job_id: str, *, reconcile=True, **options):
 
 
 def pools_discover(engine, job_id: str, portal: Portal) -> dict:
-    """Find PancakeSwap pools of the job's token; redo windows for enabled ones."""
+    """Find PancakeSwap pools of the job's token and schedule their backfill.
+
+    New pools and the windows they invalidate are saved in one transaction;
+    running discover again is safe, and sync redoes any window whose pool set
+    is out of date whatever happened in between.
+    """
     require_schema(engine)
     with job_lock(engine, job_id):
         with engine.connect() as connection:
             job = load_job(connection, job_id)
         head = portal.finalized_head()
-        added = discover_pools(engine, portal, job, head)
-    resets = {}
-    for pool in added:
-        if pool["enabled"]:
-            with job_lock(engine, job_id):
-                resets[pool["pool_address"]] = reset_windows(
-                    engine, job_id, first=pool["created_block"]
-                )
+        result = discover_pools(engine, portal, job, head)
     return {
         "job_id": job_id,
         "scanned_through": head,
         "added": [
             {k: v for k, v in p.items() if k not in ("job_id", "added_at_utc")}
-            for p in added
+            for p in result["added"]
         ],
-        "windows_reset": resets,
+        "windows_reset": result["windows_reset"],
         "note": "报价币不在 WBNB/USDT/BUSD/USDC 内的池子默认停用；确认后用 pools enable 启用",
     }
+
+
+def status_with_head(
+    engine, job_id: str, portal: Portal, *, max_lag_blocks: int | None = None
+) -> dict:
+    """Job status measured against the Portal's finalized head read just now.
+
+    If the head cannot be read the lag is unknown, never computed from an old
+    height; `behind` is then "unknown" when a limit was given.
+    """
+    head = error = None
+    observed = datetime.now(UTC).replace(tzinfo=None)
+    try:
+        head = portal.finalized_head()
+        observed = datetime.now(UTC).replace(tzinfo=None)
+    except (ChainScopeError, httpx.HTTPError) as exc:
+        error = str(exc)[:300]
+    return job_status(
+        engine,
+        job_id,
+        max_lag_blocks=max_lag_blocks,
+        head=head,
+        head_observed_at=observed if head is not None else None,
+        head_error=error,
+    )

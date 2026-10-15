@@ -177,13 +177,18 @@ def test_heads_and_time_lookup():
     assert client.block_at(1_700_000_000) == 42
 
 
-def test_finalized_head_falls_back_to_head():
+def test_finalized_head_never_falls_back_to_unfinalized_head():
+    seen = []
+
     def handler(request):
+        seen.append(request.url.path)
         if request.url.path.endswith("/finalized-head"):
             return httpx.Response(200, content=b"null")
         return httpx.Response(200, json={"number": 7})
 
-    assert portal(handler).finalized_head() == 7
+    with pytest.raises(ChainScopeError, match="不改用未确认高度"):
+        portal(handler).finalized_head()
+    assert all(path.endswith("/finalized-head") for path in seen)
 
 
 def test_block_transfers_decodes_standard_logs():
@@ -243,8 +248,8 @@ def test_single_block_window_is_never_split():
     assert len(window_transfers(client, TOKEN, 10, 10, limit=1)) == 2
 
 
-def add(tally, n, amount=5, sender=FROM):
-    tally.add(tx(n), 0, sender, TO, amount)
+def add(tally, n, amount=5, sender=FROM, block_number=10):
+    tally.add(tx(n), 0, sender, TO, amount, block_number)
 
 
 def test_tally_is_order_independent():
@@ -264,6 +269,7 @@ def test_tally_is_order_independent():
         lambda t: add(t, 3, amount=6),  # different amount
         lambda t: add(t, 3, sender=TO),  # different sender
         lambda t: add(t, 4),  # a different event, same count and amount
+        lambda t: add(t, 3, block_number=11),  # same event moved to another block
     ],
 )
 def test_tally_detects_missing_or_changed_events(change):
@@ -276,6 +282,21 @@ def test_tally_detects_missing_or_changed_events(change):
     assert not actual.matches(
         expected.events, expected.amount, expected.fingerprint_bytes()
     )
+
+
+def test_fingerprint_versions():
+    """v2 adds the block number; v1 is kept to check windows stored before it."""
+    old, new = Tally(version=1), Tally()
+    old.add(tx(1), 0, FROM, TO, 5)
+    new.add(tx(1), 0, FROM, TO, 5, 10)
+    assert old.fingerprint_bytes() != new.fingerprint_bytes()
+    moved_old, moved_new = Tally(version=1), Tally()
+    moved_old.add(tx(1), 0, FROM, TO, 5, 11)  # v1 ignores the block number
+    moved_new.add(tx(1), 0, FROM, TO, 5, 11)
+    assert moved_old.fingerprint_bytes() == old.fingerprint_bytes()
+    assert moved_new.fingerprint_bytes() != new.fingerprint_bytes()
+    with pytest.raises(ChainScopeError, match="区块号"):
+        Tally().add(tx(1), 0, FROM, TO, 5)
 
 
 def alchemy_transfer(n, amount=5):
@@ -324,6 +345,7 @@ def test_transfer_totals_match_portal_tally_across_pages():
             e["from_address"],
             e["to_address"],
             e["amount"],
+            e["block_number"],
         )
     assert page_count == 2
     assert tally.matches(expected.events, expected.amount, expected.fingerprint_bytes())

@@ -13,8 +13,8 @@ import sqlalchemy as sa
 
 from .database import utcnow
 from .errors import ChainScopeError
-from .jobs import reset_windows
-from .models import pools, swaps
+from .jobs import expected_pool_set, reset_stale_pool_windows
+from .models import pools, swaps, windows
 from .parser import ADDRESS, HASH, fixed_hex, quantity
 
 PAIR_CREATED = "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9"
@@ -131,6 +131,28 @@ def swap_log_filter(pools) -> list[dict]:
     ]
 
 
+def swap_core(log: dict, pool: dict) -> dict | None:
+    """Side and amounts of one Swap log; None when the token did not move."""
+    topics = log.get("topics") or []
+    data = log.get("data") or ""
+    if topics[0] == SWAP_V2:
+        in0, in1, out0, out1 = (word(data, i) for i in range(4))
+        delta0, delta1 = in0 - out0, in1 - out1
+    else:
+        delta0, delta1 = signed(word(data, 0)), signed(word(data, 1))
+    token_delta, quote_delta = (
+        (delta0, delta1) if pool["token_is_token0"] else (delta1, delta0)
+    )
+    if token_delta == 0:
+        return None
+    return {
+        # Pool-side deltas: the pool paying out the token is a buy.
+        "side": "buy" if token_delta < 0 else "sell",
+        "token_amount_raw": str(abs(token_delta)),
+        "quote_amount_raw": str(abs(quote_delta)),
+    }
+
+
 def block_swaps(block: dict, pools: dict) -> list[dict]:
     """Swap legs of the tracked pools in one Portal block, with the tx sender."""
     header = block["header"]
@@ -149,16 +171,8 @@ def block_swaps(block: dict, pools: dict) -> list[dict]:
             continue
         if not topics or topics[0] not in SWAP_TOPICS:
             raise ChainScopeError("Portal 返回了池子的非 Swap 日志")
-        data = log.get("data") or ""
-        if topics[0] == SWAP_V2:
-            in0, in1, out0, out1 = (word(data, i) for i in range(4))
-            delta0, delta1 = in0 - out0, in1 - out1
-        else:
-            delta0, delta1 = signed(word(data, 0)), signed(word(data, 1))
-        token_delta, quote_delta = (
-            (delta0, delta1) if pool["token_is_token0"] else (delta1, delta0)
-        )
-        if token_delta == 0:
+        core = swap_core(log, pool)
+        if core is None:
             continue
         tx_hash = fixed_hex(log.get("transactionHash"), HASH, "tx_hash")
         if tx_hash not in senders:
@@ -174,10 +188,7 @@ def block_swaps(block: dict, pools: dict) -> list[dict]:
                 "tx_hash": tx_hash,
                 "log_index": log["logIndex"],
                 "tx_from": senders[tx_hash],
-                # Pool-side deltas: the pool paying out the token is a buy.
-                "side": "buy" if token_delta < 0 else "sell",
-                "token_amount_raw": str(abs(token_delta)),
-                "quote_amount_raw": str(abs(quote_delta)),
+                **core,
                 "quote_token": pool["quote_token"],
             }
         )
@@ -234,8 +245,13 @@ def load_pools(connection, job_id: str, *, enabled_only=True) -> dict:
 
 def save_pools(
     engine, job_id: str, found: list[dict], found_by: str, *, enable_known=True
-) -> list[dict]:
-    """Insert pools not yet known. Pools quoted in a known token start enabled."""
+) -> dict:
+    """Insert pools not yet known and schedule their backfill, in one transaction.
+
+    Pools quoted in a known token start enabled; the windows that now lack
+    their swaps go back to pending in the same commit, so an interruption
+    leaves either both steps or neither.
+    """
     added = []
     with engine.begin() as connection:
         known = load_pools(connection, job_id, enabled_only=False)
@@ -252,14 +268,19 @@ def save_pools(
             connection.execute(pools.insert().values(**row))
             known[pool["pool_address"]] = row
             added.append(row)
-    return added
+        reset = reset_stale_pool_windows(
+            engine, job_id, load_pools(connection, job_id), connection
+        )
+    return {"added": added, "windows_reset": reset}
 
 
-def discover_pools(engine, portal, job: dict, head: int) -> list[dict]:
+def discover_pools(engine, portal, job: dict, head: int) -> dict:
     """PancakeSwap V2/V3 pools of the token created from the job start to head."""
     token = job["token_address"]
     found = []
-    for block in portal.stream(discovery_query(token), job["start_block"], head):
+    # From deployment, so a pool created before a later job start is still found.
+    first = job.get("deploy_block") or job["start_block"]
+    for block in portal.stream(discovery_query(token), first, head):
         found.extend(created_pools(block, token))
     return save_pools(engine, job["job_id"], found, "factory")
 
@@ -287,22 +308,27 @@ def inspect_pool(rpc, token: str, pool: str) -> dict:
 
 
 def set_pool_enabled(engine, job_id: str, pool: str, enabled: bool) -> dict:
-    """Enable: redo windows from the pool's creation. Disable: drop its swaps."""
+    """Enable: windows since the pool's creation are redone for its swaps.
+    Disable: its swaps are removed and window pool sets updated, no redo.
+    Both happen in one transaction with the flag change.
+    """
     with engine.begin() as connection:
-        row = connection.execute(
-            sa.select(pools.c.created_block).where(
-                pools.c.job_id == job_id, pools.c.pool_address == pool
-            )
+        found = connection.execute(
+            sa.select(pools.c.created_block)
+            .where(pools.c.job_id == job_id, pools.c.pool_address == pool)
+            .with_for_update()
         ).first()
-        if row is None:
+        if found is None:
             raise ChainScopeError(
                 f"任务 {job_id} 没有池子 {pool}；先 pools discover 或 pools add"
             )
+        before = load_pools(connection, job_id)
         connection.execute(
             pools.update()
             .where(pools.c.job_id == job_id, pools.c.pool_address == pool)
             .values(enabled=enabled)
         )
+        after = load_pools(connection, job_id)
         removed = 0
         if not enabled:
             removed = connection.execute(
@@ -310,13 +336,38 @@ def set_pool_enabled(engine, job_id: str, pool: str, enabled: bool) -> dict:
                     swaps.c.job_id == job_id, swaps.c.pool_address == pool
                 )
             ).rowcount
-    reset = reset_windows(engine, job_id, first=row.created_block) if enabled else 0
+            _forget_pool(connection, job_id, before, after, found.created_block)
+        reset = reset_stale_pool_windows(engine, job_id, after, connection)
     return {
         "pool": pool,
         "enabled": enabled,
         "windows_reset": reset,
         "swaps_removed": removed,
     }
+
+
+def _forget_pool(connection, job_id, before: dict, after: dict, created: int) -> None:
+    """After a disable, mark consistent windows as collected with the new set."""
+    rows = connection.execute(
+        sa.select(windows.c.start_block, windows.c.end_block, windows.c.pool_set).where(
+            windows.c.job_id == job_id,
+            windows.c.status == "done",
+            windows.c.end_block >= created,
+        )
+    ).all()
+    for start, end, stored in rows:
+        if stored != expected_pool_set(before, end):
+            continue  # already stale; the reset below redoes it
+        count = connection.scalar(
+            sa.select(sa.func.count())
+            .select_from(swaps)
+            .where(swaps.c.job_id == job_id, swaps.c.block_number.between(start, end))
+        )
+        connection.execute(
+            windows.update()
+            .where(windows.c.job_id == job_id, windows.c.start_block == start)
+            .values(pool_set=expected_pool_set(after, end), swap_count=count)
+        )
 
 
 def reserves(rpc, pool: dict, block: int) -> tuple[int, int]:

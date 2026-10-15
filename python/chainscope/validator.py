@@ -62,10 +62,31 @@ def verify_receipt(event: dict, receipt: dict) -> None:
         raise ChainScopeError("回执日志与采集金额不一致")
 
 
-def event_digest(tx_hash: str, log_index: int, sender: str, receiver: str, amount: int):
+# Version 1 hashed (tx, log, from, to, amount). Version 2 adds the block number,
+# so an event that moved to another block no longer matches. Windows keep the
+# version their fingerprint was computed with; verify-job recomputes with it.
+FINGERPRINT_VERSION = 2
+
+
+def event_digest(
+    tx_hash: str,
+    log_index: int,
+    sender: str,
+    receiver: str,
+    amount: int,
+    block_number: int | None = None,
+    version: int = FINGERPRINT_VERSION,
+):
     """SHA-256 of one Transfer's identity and content, as an integer."""
-    key = f"{tx_hash}:{log_index}:{sender}:{receiver}:{amount}".encode()
-    return int.from_bytes(hashlib.sha256(key).digest())
+    if version == 1:
+        key = f"{tx_hash}:{log_index}:{sender}:{receiver}:{amount}"
+    elif version == 2:
+        if block_number is None:
+            raise ChainScopeError("指纹版本 2 需要区块号")
+        key = f"v2:{block_number}:{tx_hash}:{log_index}:{sender}:{receiver}:{amount}"
+    else:
+        raise ChainScopeError(f"未知的指纹版本 {version}")
+    return int.from_bytes(hashlib.sha256(key.encode()).digest())
 
 
 class Tally:
@@ -73,18 +94,24 @@ class Tally:
 
     The fingerprint is the sum of every event digest modulo 2**256, so it does not
     depend on order or paging, and it changes if any event is missing, extra or
-    different in sender, receiver or amount.
+    different in block (version 2), sender, receiver or amount. Block hash and
+    time are not in it: they are checked field by field (recheck, verify-job).
     """
 
-    def __init__(self):
+    def __init__(self, version: int = FINGERPRINT_VERSION):
+        self.version = version
         self.events = 0
         self.amount = 0
         self.fingerprint = 0
 
-    def add(self, tx_hash, log_index, sender, receiver, amount) -> None:
+    def add(
+        self, tx_hash, log_index, sender, receiver, amount, block_number=None
+    ) -> None:
         self.events += 1
         self.amount += amount
-        digest = event_digest(tx_hash, log_index, sender, receiver, amount)
+        digest = event_digest(
+            tx_hash, log_index, sender, receiver, amount, block_number, self.version
+        )
         self.fingerprint = (self.fingerprint + digest) % 2**256
 
     def fingerprint_bytes(self) -> bytes:
