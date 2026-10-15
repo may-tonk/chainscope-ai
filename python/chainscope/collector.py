@@ -1,13 +1,114 @@
-"""Bounded capture of a fixed block interval, with raw evidence and validation."""
+"""Alchemy Transfers: debug capture with raw evidence, and per-window reconciliation."""
 
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
-from .archive import DEFAULT_BATCH_LIMIT, JsonArchive
+from .archive import DEFAULT_BATCH_LIMIT, TOTAL_ARCHIVE_LIMIT, JsonArchive
+from .config import ROOT, Settings
 from .errors import ChainScopeError
-from .parser import ADDRESS, HASH, fixed_hex, parse_transfer, quantity
+from .parser import (
+    ADDRESS,
+    HASH,
+    fixed_hex,
+    parse_transfer,
+    quantity,
+    transfer_identity,
+)
 from .rpc_client import RpcClient
-from .validator import verify_receipt
+from .validator import Tally, verify_receipt
+
+TRANSFERS_CU = 120  # Alchemy compute units per alchemy_getAssetTransfers call
+
+
+def transfer_params(token: str, start: int, end: int) -> dict:
+    return {
+        "fromBlock": hex(start),
+        "toBlock": hex(end),
+        "contractAddresses": [token],
+        "category": ["erc20"],
+        "excludeZeroValue": False,
+        "withMetadata": True,
+        "maxCount": "0x3e8",
+        "order": "asc",
+    }
+
+
+def next_page_key(result: dict, keys: set) -> str | None:
+    key = result.get("pageKey")
+    if key in (None, ""):
+        return None
+    if not isinstance(key, str) or key in keys:
+        raise ChainScopeError("Transfers 分页游标无效或重复")
+    keys.add(key)
+    return key
+
+
+def transfer_totals(
+    rpc: RpcClient, token: str, start: int, end: int, *, max_pages: int = 100
+) -> tuple[Tally, int]:
+    """Alchemy's own count, amount sum and fingerprint for one block window."""
+    params = transfer_params(token, start, end)
+    tally = Tally()
+    seen = {}
+    keys: set = set()
+    for page in range(1, max_pages + 1):
+        result = rpc.call("alchemy_getAssetTransfers", [params.copy()])
+        if not isinstance(result, dict) or not isinstance(
+            result.get("transfers"), list
+        ):
+            raise ChainScopeError("Transfers 响应缺少 transfers 列表")
+        for raw in result["transfers"]:
+            event = transfer_identity(raw, token, start, end)
+            key = (event["tx_hash"], event["log_index"])
+            if key in seen:
+                if seen[key] != event:
+                    raise ChainScopeError("分页返回的同一事件内容冲突")
+                continue
+            seen[key] = event
+            tally.add(
+                event["tx_hash"],
+                event["log_index"],
+                event["from_address"],
+                event["to_address"],
+                event["amount"],
+            )
+        key = next_page_key(result, keys)
+        if key is None:
+            return tally, page
+        params["pageKey"] = key
+    raise ChainScopeError("对账达到分页上限但仍有下一页；请缩小窗口")
+
+
+def fetch_debug(
+    settings: Settings,
+    token: str,
+    start: int,
+    end: int,
+    *,
+    max_pages: int,
+    receipt_limit: int,
+    archive_max_bytes: int = DEFAULT_BATCH_LIMIT,
+) -> dict:
+    """Capture a small range into raw/ for debugging; nothing is written to MySQL."""
+    token = fixed_hex(token, ADDRESS, "token")
+    if not 0 < archive_max_bytes <= TOTAL_ARCHIVE_LIMIT:
+        raise ChainScopeError("归档容量不合法")
+    batch_id = str(uuid4())
+    directory = ROOT / "raw" / batch_id
+    with RpcClient(settings.require_rpc()) as rpc:
+        _, manifest = capture(
+            rpc,
+            token,
+            start,
+            end,
+            directory,
+            batch_id=batch_id,
+            max_pages=max_pages,
+            receipt_limit=receipt_limit,
+            archive_max_bytes=archive_max_bytes,
+        )
+    return {**manifest, "raw_directory": str(directory)}
 
 
 def capture(
@@ -96,17 +197,8 @@ def _capture(rpc, token, start, end, max_pages, receipt_limit):
         raise ChainScopeError("结束区块不存在或区块头不匹配")
     anchor_hash = fixed_hex(anchor.get("hash"), HASH, "end_block_hash")
     blocks = {end: anchor}
-    params = {
-        "fromBlock": hex(start),
-        "toBlock": hex(end),
-        "contractAddresses": [token],
-        "category": ["erc20"],
-        "excludeZeroValue": False,
-        "withMetadata": True,
-        "maxCount": "0x3e8",
-        "order": "asc",
-    }
-    keys = set()
+    params = transfer_params(token, start, end)
+    keys: set = set()
     events = {}
     raw_count = 0
     for page in range(1, max_pages + 1):
@@ -131,12 +223,9 @@ def _capture(rpc, token, start, end, max_pages, receipt_limit):
                 raise ChainScopeError("分页返回的同一事件内容冲突")
             events[key] = event
             raw_count += 1
-        key = result.get("pageKey")
-        if key in (None, ""):
+        key = next_page_key(result, keys)
+        if key is None:
             break
-        if not isinstance(key, str) or key in keys:
-            raise ChainScopeError("Transfers 分页游标无效或重复")
-        keys.add(key)
         params["pageKey"] = key
     else:
         raise ChainScopeError("达到分页上限但仍有下一页，批次未完成；请缩小区块范围")

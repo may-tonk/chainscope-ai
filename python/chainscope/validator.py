@@ -1,4 +1,6 @@
-"""Compare Transfer events to authoritative transaction receipt logs."""
+"""Compare Transfer events to receipts and reconcile totals between sources."""
+
+import hashlib
 
 from .errors import ChainScopeError
 from .parser import ADDRESS, HASH, fixed_hex, quantity
@@ -58,3 +60,39 @@ def verify_receipt(event: dict, receipt: dict) -> None:
     data = fixed_hex(log.get("data"), HASH, "Transfer.data")
     if str(quantity(data, "Transfer.value")) != event["amount_raw"]:
         raise ChainScopeError("回执日志与采集金额不一致")
+
+
+def event_digest(tx_hash: str, log_index: int, sender: str, receiver: str, amount: int):
+    """SHA-256 of one Transfer's identity and content, as an integer."""
+    key = f"{tx_hash}:{log_index}:{sender}:{receiver}:{amount}".encode()
+    return int.from_bytes(hashlib.sha256(key).digest())
+
+
+class Tally:
+    """Order-independent totals: two sources compare without holding the events.
+
+    The fingerprint is the sum of every event digest modulo 2**256, so it does not
+    depend on order or paging, and it changes if any event is missing, extra or
+    different in sender, receiver or amount.
+    """
+
+    def __init__(self):
+        self.events = 0
+        self.amount = 0
+        self.fingerprint = 0
+
+    def add(self, tx_hash, log_index, sender, receiver, amount) -> None:
+        self.events += 1
+        self.amount += amount
+        digest = event_digest(tx_hash, log_index, sender, receiver, amount)
+        self.fingerprint = (self.fingerprint + digest) % 2**256
+
+    def fingerprint_bytes(self) -> bytes:
+        return self.fingerprint.to_bytes(32)
+
+    def matches(self, events: int, amount: int, fingerprint: bytes) -> bool:
+        return (
+            self.events == events
+            and self.amount == amount
+            and self.fingerprint_bytes() == fingerprint
+        )
