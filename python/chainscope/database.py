@@ -13,7 +13,7 @@ from .config import ROOT, Settings
 from .errors import ChainScopeError
 from .models import batch_events, batches, metadata, transfers
 
-SCHEMA_REVISION = "0004"
+SCHEMA_REVISION = "0005"
 SCHEMA_TABLES = (
     "collection_batches",
     "transfer_events",
@@ -22,6 +22,14 @@ SCHEMA_TABLES = (
     "coverage_windows",
     "window_events",
     "window_diffs",
+    "dex_pools",
+    "swap_events",
+    "address_balances",
+    "address_info",
+    "address_labels",
+    "market_snapshots",
+    "pool_snapshots",
+    "pool_ohlcv",
     "alembic_version",
 )
 

@@ -15,7 +15,9 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .config import ROOT, Settings
 from .database import check_database, engine_for, fail_batch, start_batch
+from .dex import attribute_all, discover_pools, load_pools
 from .errors import ChainScopeError
+from .holders import refresh_balances
 from .jobs import (
     begin_window,
     create_job,
@@ -43,6 +45,7 @@ from .sqd import (
     PARSER_VERSION,
     Portal,
     TooManyEvents,
+    window_activity,
     window_transfers,
 )
 from .validator import Tally
@@ -277,6 +280,7 @@ def sync_job(
         "windows_done": 0,
         "events": 0,
         "inserted": 0,
+        "swaps": 0,
         "splits": 0,
         "reconcile": "alchemy" if rpc is not None else "skipped",
     }
@@ -288,6 +292,9 @@ def sync_job(
         if job["source"] != "sqd":
             raise ChainScopeError(f"暂不支持数据源 {job['source']}")
         token = job["token_address"]
+        with engine.connect() as connection:
+            pools = load_pools(connection, job_id)
+        summary["pools"] = len(pools)
         summary["recovered_abandoned"] = recover_abandoned(engine, job_id)
         head = source_head(portal, rpc, summary)
         summary["source_head"] = head
@@ -312,7 +319,10 @@ def sync_job(
             begin_window(engine, job_id, start, attempt)
             tick = clock()
             try:
-                found = window_transfers(portal, token, start, end, event_limit)
+                found, legs = window_activity(
+                    portal, token, start, end, event_limit, pools
+                )
+                swap_rows = attribute_all(legs, found)
                 fault("after_fetch")
                 rows = [event_row(e, job["token_decimals"]) for e in found]
                 tally = tally_of(found)
@@ -339,6 +349,7 @@ def sync_job(
                     head,
                     sleep=sleep,
                     extra=extra,
+                    swap_rows=swap_rows,
                 )
                 stored = window_tally(engine, job_id, start)
                 if not stored.matches(
@@ -364,11 +375,13 @@ def sync_job(
             summary["windows_done"] += 1
             summary["events"] += tally.events
             summary["inserted"] += result.get("inserted", 0)
+            summary["swaps"] += len(swap_rows)
             summary["verified_through"] = result["through"]
             log(
                 {
                     "window": [start, end],
                     "events": tally.events,
+                    "swaps": len(swap_rows),
                     "inserted": result.get("inserted"),
                     "reconcile": extra["reconcile"],
                     "receipt_checked": extra["receipt_checked"],
@@ -377,6 +390,7 @@ def sync_job(
                     "requests": portal.stats["requests"] + (rpc.requests if rpc else 0),
                 }
             )
+        summary["balances"] = refresh_balances(engine, job_id)
     summary["elapsed_seconds"] = round(budget.elapsed(), 1)
     summary["usage"] = usage(portal, rpc)
     return summary
@@ -492,3 +506,30 @@ def run_recheck(settings: Settings, job_id: str, *, reconcile=True, **options):
             return recheck_job(engine, job_id, portal, rpc=rpc, **options)
     finally:
         engine.dispose()
+
+
+def pools_discover(engine, job_id: str, portal: Portal) -> dict:
+    """Find PancakeSwap pools of the job's token; redo windows for enabled ones."""
+    require_schema(engine)
+    with job_lock(engine, job_id):
+        with engine.connect() as connection:
+            job = load_job(connection, job_id)
+        head = portal.finalized_head()
+        added = discover_pools(engine, portal, job, head)
+    resets = {}
+    for pool in added:
+        if pool["enabled"]:
+            with job_lock(engine, job_id):
+                resets[pool["pool_address"]] = reset_windows(
+                    engine, job_id, first=pool["created_block"]
+                )
+    return {
+        "job_id": job_id,
+        "scanned_through": head,
+        "added": [
+            {k: v for k, v in p.items() if k not in ("job_id", "added_at_utc")}
+            for p in added
+        ],
+        "windows_reset": resets,
+        "note": "报价币不在 WBNB/USDT/BUSD/USDC 内的池子默认停用；确认后用 pools enable 启用",
+    }

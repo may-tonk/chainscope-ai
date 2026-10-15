@@ -13,3 +13,7 @@ Navicat 用于连接数据库和检查结果；正式结构变更必须保留迁
 依据：[MySQL DECIMAL 文档](https://dev.mysql.com/doc/refman/8.0/en/precision-math-decimal-characteristics.html)。`VARCHAR(78)`、数字格式和 uint256 上限 CHECK、事件唯一键已通过真实数据库测试。
 
 2026-10-15 新增 `0003_jobs_windows.py`：新建 scan_jobs、coverage_windows、window_events 三张表，并给 collection_batches 增加可空的 job_id 列，用于长期采集任务的窗口进度与续采。只新增表和可空列，不改动已有数据；`check` 要求结构版本为 0003，已有数据库执行一次 `init-db` 即可升级。
+
+2026-10-15 新增 `0004_reconcile_amounts.py`：coverage_windows 增加 receipt_checked，transfer_events 增加生成列 amount_len 和金额排序索引，新建 window_diffs 记录对账差异。
+
+2026-10-15 新增 `0005_dex_holders_market.py`：scan_jobs 增加 balances_through，coverage_windows 增加 swap_count；新建 dex_pools、swap_events、address_balances（DECIMAL(65,0)，超过 65 位的金额会被拒绝累计）、address_info、address_labels、market_snapshots、pool_snapshots、pool_ohlcv。只新增表和可空列，已有数据不变，执行一次 `init-db` 即可升级。

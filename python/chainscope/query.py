@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 from .errors import ChainScopeError
 from .jobs import load_job
-from .models import transfers, window_events, windows
+from .models import swaps, transfers, window_events, windows
 
 BEIJING = timezone(timedelta(hours=8))
 ZERO = "0x" + "0" * 40
@@ -122,6 +122,52 @@ def summarize(engine, job: dict, first: int, last: int) -> dict:
     }
 
 
+def swap_summary(engine, job: dict, first: int, last: int) -> dict:
+    """Buys and sells of tracked pools in the range, per side and quote token."""
+    amount = sa.cast(swaps.c.token_amount_raw, sa.Numeric(65, 0))
+    quote = sa.cast(swaps.c.quote_amount_raw, sa.Numeric(65, 0))
+    where = [swaps.c.job_id == job["job_id"], swaps.c.block_number.between(first, last)]
+    with engine.connect() as connection:
+        rows = connection.execute(
+            sa.select(
+                swaps.c.side,
+                swaps.c.quote_token,
+                sa.func.count(),
+                sa.func.sum(amount),
+                sa.func.sum(quote),
+                sa.func.count(sa.distinct(swaps.c.trader)),
+            )
+            .where(*where)
+            .group_by(swaps.c.side, swaps.c.quote_token)
+        ).all()
+        attribution = dict(
+            connection.execute(
+                sa.select(swaps.c.attribution, sa.func.count())
+                .where(*where)
+                .group_by(swaps.c.attribution)
+            ).all()
+        )
+        traders = connection.scalar(
+            sa.select(sa.func.count(sa.distinct(swaps.c.trader))).where(*where)
+        )
+    return {
+        "by_side": [
+            {
+                "side": side,
+                "quote_token": quote_token,
+                "swaps": n,
+                "token_amount_raw": str(int(token_sum)),
+                "quote_amount_raw": str(int(quote_sum)),
+                "traders": distinct,
+            }
+            for side, quote_token, n, token_sum, quote_sum, distinct in rows
+        ],
+        "traders": traders,
+        "attribution": attribution,
+        "note": "trader 是交易发起地址；router/ambiguous 表示经聚合器或合约转手",
+    }
+
+
 def query_job(engine, portal, job_id: str, start_text: str, end_text: str) -> dict:
     start, end = parse_time(start_text), parse_time(end_text)
     first, last = block_range(portal, start, end)
@@ -138,6 +184,7 @@ def query_job(engine, portal, job_id: str, start_text: str, end_text: str) -> di
     }
     if result["coverage"]["state"] != "none" and last >= first:
         result.update(summarize(engine, job, first, last))
+        result["swaps"] = swap_summary(engine, job, first, last)
     return result
 
 

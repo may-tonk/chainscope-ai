@@ -4,12 +4,13 @@ import argparse
 import csv
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import httpx
 from sqlalchemy.exc import SQLAlchemyError
 
-from .config import load_settings
+from .config import ROOT, load_settings
 from .database import (
     check_database,
     database_error,
@@ -17,15 +18,18 @@ from .database import (
     initialize,
     verify_batch,
 )
+from .dex import inspect_pool, load_pools, save_pools, set_pool_enabled
 from .errors import ChainScopeError
-from .jobs import job_status, verify_job
+from .holders import import_labels, top_holders, verify_holders
+from .jobs import job_lock, job_status, load_job, verify_job
+from .market import Http, snapshot_market
 from .parser import quantity
 from .pipeline import run_collection
 from .query import query_job
 from .records import inspect_csv
 from .rpc_client import RpcClient
 from .sqd import DEFAULT_DATASET, DEFAULT_PORTAL, Portal
-from .sync import create, redo_job, run_recheck, run_sync
+from .sync import create, pools_discover, redo_job, run_recheck, run_sync
 
 
 def main() -> int:
@@ -135,6 +139,44 @@ def main() -> int:
         "verify-job", help="从 MySQL 重新计算每个完成窗口，核对数量、金额和指纹"
     )
     verify_job_cmd.add_argument("--job", default="bem")
+    pools = commands.add_parser(
+        "pools",
+        help="交易池：discover 自动发现 / list / add 手工添加 / enable / disable",
+    )
+    pools.add_argument(
+        "action", choices=("discover", "list", "add", "enable", "disable")
+    )
+    pools.add_argument("--job", default="bem")
+    pools.add_argument("--pool", help="池子地址（add/enable/disable 需要）")
+    pools.add_argument(
+        "--created-block", type=int, help="add：池子创建区块，默认任务起点"
+    )
+    holders = commands.add_parser(
+        "holders", help="持仓排行（默认前 80），附标签和是否合约；可指定历史区块"
+    )
+    holders.add_argument("--job", default="bem")
+    holders.add_argument("--top", type=int, default=80)
+    holders.add_argument(
+        "--at-block", type=int, help="统计到该区块为止（需在已核验范围内）"
+    )
+    holders_verify = commands.add_parser(
+        "holders-verify",
+        help="用链上 totalSupply 和 balanceOf 核对持仓，并记录是否合约",
+    )
+    holders_verify.add_argument("--job", default="bem")
+    holders_verify.add_argument("--top", type=int, default=20)
+    labels_cmd = commands.add_parser("labels-import", help="从 TOML 文件导入地址标签")
+    labels_cmd.add_argument(
+        "--file", type=Path, default=ROOT / "config" / "address_labels.toml"
+    )
+    market = commands.add_parser(
+        "market", help="保存 CoinGecko 价格/市值/成交量、池子行情和 4 小时 K 线"
+    )
+    market.add_argument("--job", default="bem")
+    market.add_argument(
+        "--ohlcv-limit", type=int, default=180, help="K 线根数，0 表示不取"
+    )
+    market.add_argument("--no-chain", action="store_true", help="不读链上储备做核对")
     args = parser.parse_args()
     code = 0
     try:
@@ -173,6 +215,8 @@ def main() -> int:
                 seed=args.seed,
             )
             code = 0 if result["ok"] else 3
+        elif args.command in ("pools", "holders-verify", "market"):
+            result, code = run_with_sources(args)
         elif args.command == "query":
             settings = load_settings()
             engine = engine_for(settings)
@@ -214,6 +258,12 @@ def main() -> int:
                 elif args.command == "verify-job":
                     result = verify_job(engine, args.job)
                     code = 0 if result["ok"] else 3
+                elif args.command == "holders":
+                    result = top_holders(
+                        engine, args.job, top=args.top, at_block=args.at_block
+                    )
+                elif args.command == "labels-import":
+                    result = import_labels(engine, args.file)
                 else:
                     with RpcClient(settings.require_rpc()) as rpc:
                         chain_id = quantity(rpc.call("eth_chainId", []), "chain_id")
@@ -247,6 +297,63 @@ def main() -> int:
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     return code
+
+
+def run_with_sources(args) -> tuple[dict, int]:
+    """Commands that need MySQL plus the Portal, the RPC or market APIs."""
+    settings = load_settings()
+    engine = engine_for(settings)
+    try:
+        with httpx.Client(timeout=httpx.Timeout(60, connect=15)) as http:
+            if args.command == "market":
+                chain = (
+                    nullcontext()
+                    if args.no_chain
+                    else RpcClient(settings.require_rpc())
+                )
+                with chain as rpc:
+                    result = snapshot_market(
+                        engine,
+                        Http(http),
+                        args.job,
+                        rpc=rpc,
+                        api_key=settings.coingecko_key,
+                        ohlcv_limit=args.ohlcv_limit,
+                    )
+                return result, 0
+            if args.command == "holders-verify":
+                with RpcClient(settings.require_rpc()) as rpc:
+                    result = verify_holders(engine, rpc, args.job, top=args.top)
+                return result, 0 if result["ok"] else 3
+            if args.action == "discover":
+                portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+                return pools_discover(engine, args.job, portal), 0
+            if args.action == "list":
+                with engine.connect() as connection:
+                    found = load_pools(connection, args.job, enabled_only=False)
+                return {"job_id": args.job, "pools": list(found.values())}, 0
+            if not args.pool:
+                raise ChainScopeError("请用 --pool 指定池子地址")
+            pool = args.pool.lower()
+            if args.action == "add":
+                with engine.connect() as connection:
+                    job = load_job(connection, args.job)
+                with RpcClient(settings.require_rpc()) as rpc:
+                    row = inspect_pool(rpc, job["token_address"], pool)
+                row["created_block"] = args.created_block or job["start_block"]
+                added = save_pools(
+                    engine, args.job, [row], "manual", enable_known=False
+                )
+                if not added:
+                    raise ChainScopeError("该池子已存在；用 pools enable 启用")
+                return {"added": added[0], "next": "确认无误后执行 pools enable"}, 0
+            with job_lock(engine, args.job):
+                result = set_pool_enabled(
+                    engine, args.job, pool, args.action == "enable"
+                )
+            return result, 0
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":

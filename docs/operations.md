@@ -5,12 +5,21 @@
 ## 1. 首次准备
 
 ```powershell
-cs init-db                      # 升级到迁移 0004，只新增表、列和索引
+cs init-db                      # 升级到迁移 0005，只新增表、列和索引
 cs check                        # 包括与 models.py 的完整结构比对，schema_differences 应为空
 cs job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a
 ```
 
 `job-create` 会用 eth_getCode 二分查找部署区块（约 30 次请求），并读取 decimals。
+
+```powershell
+cs pools discover --job bem     # 扫描 PancakeSwap V2/V3 工厂事件，找出 BEM 的所有池子
+cs pools list --job bem         # 报价币是 WBNB/USDT/BUSD/USDC 的池子自动启用，其余默认停用
+cs pools enable --job bem --pool 0x...   # 人工确认后启用；会从池子创建区块起重做窗口
+cs labels-import                # 导入 config/address_labels.toml
+```
+
+最好在第一次 `sync` 之前执行 `pools discover`，这样回填只做一遍。之后启用新池子会重做它创建以来的窗口（Transfer 不会重复写入，但会再次与 Alchemy 对账，消耗请求）。
 
 ## 2. 日常运行
 
@@ -23,6 +32,17 @@ cs query --job bem --from 2026-10-01 --to 2026-10-08
 - `sync` 默认每个窗口都用 Alchemy 对账（条数、金额合计、指纹），并随机抽 3 笔交易核对回执；对账不一致时，差异写入 `window_diffs`，命令以非 0 退出，水位不会越过这个窗口。
 - 预算参数：`--max-minutes`、`--max-requests`、`--max-cu`、`--max-windows`。到达上限后在窗口之间停下，下次接着做。
 - 每个窗口的进度记录在 `logs/sync-YYYYMMDD.jsonl`。
+
+持仓与行情：
+
+```powershell
+cs holders --job bem --top 80             # 前 80 持有人，持仓数据截至 as_of_block
+cs holders --job bem --at-block 45000000  # 历史某区块的排行（需在水位以内）
+cs holders-verify --job bem --top 20      # 与链上 totalSupply、balanceOf 比对，退出码 3 表示不一致
+cs market --job bem                       # 每小时一次即可；公开接口约每分钟 30 次
+```
+
+`market` 的价格、市值、成交量来自第三方，只作参考；链上价格（V2 储备或 V3 slot0）与 GeckoTerminal 相差超过 2% 会在 warnings 中提示。CoinGecko 若没有收录 BEM，记录为 listed=false。可在 `.env` 设置 `COINGECKO_API_KEY`（Demo key）提高限额。
 
 ## 3. 定时运行
 
