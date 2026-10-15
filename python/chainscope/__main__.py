@@ -18,12 +18,14 @@ from .database import (
     verify_batch,
 )
 from .errors import ChainScopeError
-from .jobs import job_status
+from .jobs import job_status, verify_job
 from .parser import quantity
 from .pipeline import run_collection
+from .query import query_job
 from .records import inspect_csv
 from .rpc_client import RpcClient
-from .sync import create, run_sync
+from .sqd import DEFAULT_DATASET, DEFAULT_PORTAL, Portal
+from .sync import create, redo_job, run_recheck, run_sync
 
 
 def main() -> int:
@@ -89,9 +91,52 @@ def main() -> int:
         default=50_000,
         help="单个窗口最多事件数，超过则自动拆分窗口",
     )
+    sync.add_argument("--max-requests", type=int, help="本次 HTTP 请求总数上限")
+    sync.add_argument("--max-cu", type=int, help="本次 Alchemy 计算单元上限（估算）")
+    sync.add_argument(
+        "--no-reconcile",
+        action="store_true",
+        help="不用 Alchemy 对账（窗口标为 skipped，不推荐）",
+    )
+    sync.add_argument(
+        "--trace-memory", action="store_true", help="记录本次运行的 Python 内存峰值"
+    )
     status = commands.add_parser("status", help="查看任务水位、积压和失败窗口")
     status.add_argument("--job", default="bem")
+    status.add_argument(
+        "--max-lag-blocks",
+        type=int,
+        help="水位落后超过该区块数时以退出码 2 结束（约 0.45 秒一块）",
+    )
+    recheck = commands.add_parser(
+        "recheck", help="随机复查已完成窗口；有变化的窗口标为失败并回退水位"
+    )
+    recheck.add_argument("--job", default="bem")
+    recheck.add_argument("--sample", type=int, default=20)
+    recheck.add_argument("--seed", type=int, help="随机种子，便于复现")
+    recheck.add_argument("--no-reconcile", action="store_true")
+    redo = commands.add_parser(
+        "redo", help="把已完成窗口重置为待采集（旧解析版本，或指定区块范围）"
+    )
+    redo.add_argument("--job", default="bem")
+    redo.add_argument("--from-block", type=int)
+    redo.add_argument("--to-block", type=int)
+    query = commands.add_parser(
+        "query", help="按北京时间统计转账；范围为 [from, to)，超出水位会提示部分覆盖"
+    )
+    query.add_argument("--job", default="bem")
+    query.add_argument("--from", dest="start", required=True, help="如 2026-10-01")
+    query.add_argument(
+        "--to", dest="end", required=True, help="如 2026-10-08（不包含）"
+    )
+    report = commands.add_parser("report", help="各表存储占用和三类查询耗时")
+    report.add_argument("--job", default="bem")
+    verify_job_cmd = commands.add_parser(
+        "verify-job", help="从 MySQL 重新计算每个完成窗口，核对数量、金额和指纹"
+    )
+    verify_job_cmd.add_argument("--job", default="bem")
     args = parser.parse_args()
+    code = 0
     try:
         if args.command == "inspect":
             result = inspect_csv(args.input, args.limit)
@@ -111,10 +156,32 @@ def main() -> int:
             result = run_sync(
                 load_settings(),
                 args.job,
+                reconcile=not args.no_reconcile,
+                trace_memory=args.trace_memory,
                 max_windows=args.max_windows,
                 max_seconds=None if args.max_minutes is None else args.max_minutes * 60,
+                max_requests=args.max_requests,
+                max_compute_units=args.max_cu,
                 event_limit=args.event_limit,
             )
+        elif args.command == "recheck":
+            result = run_recheck(
+                load_settings(),
+                args.job,
+                reconcile=not args.no_reconcile,
+                sample=args.sample,
+                seed=args.seed,
+            )
+            code = 0 if result["ok"] else 3
+        elif args.command == "query":
+            settings = load_settings()
+            engine = engine_for(settings)
+            try:
+                with httpx.Client(timeout=httpx.Timeout(60, connect=15)) as http:
+                    portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+                    result = query_job(engine, portal, args.job, args.start, args.end)
+            finally:
+                engine.dispose()
         elif args.command in ("collect", "fetch"):
             result = run_collection(
                 load_settings(),
@@ -134,13 +201,28 @@ def main() -> int:
                 if args.command == "verify":
                     result = verify_batch(engine, args.batch_id)
                 elif args.command == "status":
-                    result = job_status(engine, args.job)
+                    result = job_status(
+                        engine, args.job, max_lag_blocks=args.max_lag_blocks
+                    )
+                    code = 2 if result["behind"] else 0
+                elif args.command == "redo":
+                    result = redo_job(
+                        engine, args.job, first=args.from_block, last=args.to_block
+                    )
+                elif args.command == "report":
+                    result = report(engine, args.job)
+                elif args.command == "verify-job":
+                    result = verify_job(engine, args.job)
+                    code = 0 if result["ok"] else 3
                 else:
                     with RpcClient(settings.require_rpc()) as rpc:
                         chain_id = quantity(rpc.call("eth_chainId", []), "chain_id")
                         if chain_id != 56:
                             raise ChainScopeError("RPC 不是 BSC 主网")
-                    result = {"chain_id": chain_id, **check_database(engine)}
+                    result = {
+                        "chain_id": chain_id,
+                        **check_database(engine, full=True),
+                    }
             finally:
                 engine.dispose()
     except SQLAlchemyError as exc:
@@ -164,7 +246,7 @@ def main() -> int:
         )
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    return 0
+    return code
 
 
 if __name__ == "__main__":

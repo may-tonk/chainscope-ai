@@ -17,6 +17,7 @@ DEFAULT_DATASET = "binance-mainnet"
 # Bump when parsing rules change, so affected windows can be found and redone.
 PARSER_VERSION = 1
 RETRY_STATUS = (429, 500, 502, 503, 504)
+MAX_LINE_CHARS = 8 * 1024 * 1024
 BLOCK_FIELDS = {"number": True, "hash": True, "timestamp": True}
 LOG_FIELDS = {
     "logIndex": True,
@@ -139,6 +140,10 @@ class Portal:
                     retry_after = response.headers.get("Retry-After")
                     if status == 200:
                         for line in response.iter_lines():
+                            if len(line) > MAX_LINE_CHARS:
+                                raise ChainScopeError(
+                                    "Portal 单个区块响应超过 8 MiB 上限"
+                                )
                             if not line.strip():
                                 continue
                             block = portal_block(line)

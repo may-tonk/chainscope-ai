@@ -81,12 +81,17 @@ CLI / 配置 → 固定范围分页采集 → 精确解析 → 回执核验
 | `inspect` | 检查历史 CSV 的有限样本，不重新采集 |
 | `job-create` | 创建长期采集任务；省略 `--start-block` 时用 eth_getCode 二分查找部署区块 |
 | `sync` | 从 SQD Portal 按窗口采集到最终确认高度，逐窗入库并推进水位；可随时中断，下次自动续采 |
-| `status` | 查看任务水位、剩余区块、失败窗口和最近的数据源高度 |
+| `status` | 查看任务水位、剩余区块、失败窗口、对账统计；`--max-lag-blocks` 超出时退出码 2 |
+| `recheck` | 随机复查已完成窗口，变化的窗口标为失败并回退水位 |
+| `redo` | 把旧解析版本或指定区块范围的窗口重置为待采集 |
+| `query` | 按北京时间 [from, to) 统计转账，超出水位时标明部分覆盖 |
+| `report` | 各表存储占用与三类查询耗时、所用索引 |
+| `verify-job` | 从 MySQL 重新计算每个完成窗口并核对指纹 |
 
 ### 长期采集 BEM
 
 ```powershell
-uv run --all-extras --locked chainscope init-db        # 升级到 0003
+uv run --all-extras --locked chainscope init-db        # 升级到 0004
 uv run --all-extras --locked chainscope job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a
 uv run --all-extras --locked chainscope sync --job bem --max-minutes 30
 uv run --all-extras --locked chainscope status --job bem
@@ -96,7 +101,8 @@ uv run --all-extras --locked chainscope status --job bem
 - 窗口按区块升序处理，失败窗口优先重试；水位只沿连续完成的窗口推进，不会越过空洞。没有事件的窗口也记录为完成。
 - 单窗口事件超过 `--event-limit`（默认 5 万）时自动对半拆分；每个窗口一个事务，批量查重和写入，死锁/断线有限重试，提交确认丢失时以数据库窗口状态为准。
 - 入库后从 MySQL 流式读回，按数量、金额合计和指纹核对。
-- 目前只处理已最终确认的区块；Alchemy 对账、回执抽样和时间范围输入在后续阶段加入，见 [BEM 采集解决方案](docs/BEM采集解决方案-2026-10-15.md)。
+- 只处理已最终确认的区块（SQD finalized 与 Alchemy finalized 取较小值）。默认每个窗口都与 Alchemy 对账并抽查 3 笔回执，不一致时记录到 `window_diffs` 并停止推进。
+- 运行、定时任务、备份恢复和故障注入演练见 [运行与验收手册](docs/operations.md)；方案见 [BEM 采集解决方案](docs/BEM采集解决方案-2026-10-15.md)。
 
 ## 可选调试归档
 
@@ -154,7 +160,7 @@ raw/                可选调试归档，运行时创建，不提交
 ## 当前边界与后续工作
 
 - `collect` 仍在整个有限批次内累积并逐条查重/写入；长期采集请用 `sync`（按窗口批量写入）。
-- `sync` 已实现持久化进度、自动续跑和连续水位；尚未实现跨数据源对账、链重组修复和大规模实测。
+- `sync` 已实现持久化进度、自动续跑、连续水位、跨数据源对账和复查；已最终确认区块的冲突只记录并停止，不自动修复；规模验收需在真实数据上按运行手册完成。
 - 回执对照验证返回事件，不能证明供应商没有遗漏；金额总和是读回计算，不是独立完整性对账。
 - 结束区块要求至少 12 个后续区块，只是当前链头避让规则，不构成最终性证明。
 - 当前提供单链、单合约、固定范围 CLI；业务 SQL、API、调度、监控和部署继续在同一项目扩展。
