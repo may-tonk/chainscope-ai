@@ -17,6 +17,7 @@ from .errors import ChainScopeError
 from .models import (
     batches,
     jobs,
+    swaps,
     transfers,
     window_diffs,
     window_events,
@@ -309,7 +310,15 @@ def _advance(connection, job_id: str) -> int | None:
 
 
 def _store(
-    engine, job, window, attempt_id, events, tally, source_head, extra=None
+    engine,
+    job,
+    window,
+    attempt_id,
+    events,
+    tally,
+    source_head,
+    extra=None,
+    swap_rows=None,
 ) -> dict:
     with engine.begin() as connection:
         locked = (
@@ -358,6 +367,19 @@ def _store(
                 window_events.insert().prefix_with("IGNORE"),
                 links[offset : offset + CHUNK],
             )
+        if swap_rows is not None:
+            # Swaps are derived data: replace the window's set as a whole.
+            connection.execute(
+                swaps.delete().where(
+                    swaps.c.job_id == job["job_id"],
+                    swaps.c.block_number.between(
+                        window["start_block"], window["end_block"]
+                    ),
+                )
+            )
+            rows = [{**s, "job_id": job["job_id"]} for s in swap_rows]
+            for offset in range(0, len(rows), CHUNK):
+                connection.execute(swaps.insert(), rows[offset : offset + CHUNK])
         now = utcnow()
         connection.execute(
             windows.update()
@@ -367,6 +389,7 @@ def _store(
             )
             .values(
                 status="done",
+                swap_count=None if swap_rows is None else len(swap_rows),
                 event_count=len(events),
                 inserted_count=len(fresh),
                 amount_sum=str(tally.amount),
@@ -410,13 +433,31 @@ def _committed(engine, job_id: str, start: int, attempt_id: str) -> bool:
 
 
 def store_window(
-    engine, job, window, attempt_id, events, tally, source_head, *, sleep, extra=None
+    engine,
+    job,
+    window,
+    attempt_id,
+    events,
+    tally,
+    source_head,
+    *,
+    sleep,
+    extra=None,
+    swap_rows=None,
 ) -> dict:
     """Commit one window atomically; retry deadlocks; resolve unknown commits."""
     for attempt in range(3):
         try:
             return _store(
-                engine, job, window, attempt_id, events, tally, source_head, extra
+                engine,
+                job,
+                window,
+                attempt_id,
+                events,
+                tally,
+                source_head,
+                extra,
+                swap_rows,
             )
         except OperationalError as exc:
             code = exc.orig.args[0] if exc.orig is not None and exc.orig.args else None
@@ -559,9 +600,12 @@ def _rewind(connection, job_id: str, first_block: int) -> None:
     if through is None or through < first_block:
         return
     value = None if first_block <= job["start_block"] else first_block - 1
-    connection.execute(
-        jobs.update().where(jobs.c.job_id == job_id).values(verified_through=value)
-    )
+    changes = {"verified_through": value}
+    balances = job["balances_through"]
+    if balances is not None and (value is None or value < balances):
+        # A redone window may add transfers below the balance mark: rebuild.
+        changes["balances_through"] = None
+    connection.execute(jobs.update().where(jobs.c.job_id == job_id).values(**changes))
 
 
 def invalidate_window(engine, job_id: str, start: int, error_type: str) -> None:

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import httpx
 
+from .dex import block_swaps, swap_log_filter
 from .errors import ChainScopeError
 from .parser import ADDRESS, HASH, fixed_hex, quantity
 from .validator import TRANSFER_TOPIC
@@ -189,16 +190,24 @@ def portal_block(line: str) -> dict:
     return block
 
 
-def transfer_query(token: str) -> dict:
-    return {
+def transfer_query(token: str, swap_logs: list[dict] | None = None) -> dict:
+    """Token Transfers, plus the Swap logs of tracked pools with their senders."""
+    query = {
         "type": "evm",
         "fields": {"block": BLOCK_FIELDS, "log": LOG_FIELDS},
         "logs": [{"address": [token], "topic0": [TRANSFER_TOPIC]}],
     }
+    if swap_logs:
+        query["fields"]["transaction"] = {"hash": True, "from": True}
+        query["logs"] += swap_logs
+    return query
 
 
-def block_transfers(block: dict, token: str) -> list[dict]:
-    """Parse one Portal block into Transfer events, rejecting non-standard logs."""
+def block_transfers(block: dict, token: str, ignore=frozenset()) -> list[dict]:
+    """Parse one Portal block into Transfer events, rejecting non-standard logs.
+
+    ignore: addresses whose logs belong to another parser (tracked pools).
+    """
     header = block["header"]
     stamp = header.get("timestamp")
     if not isinstance(stamp, int) or isinstance(stamp, bool) or stamp < 0:
@@ -213,6 +222,12 @@ def block_transfers(block: dict, token: str) -> list[dict]:
     seen = set()
     for log in logs:
         topics = log.get("topics") if isinstance(log, dict) else None
+        if (
+            ignore
+            and isinstance(log, dict)
+            and str(log.get("address")).lower() in ignore
+        ):
+            continue
         if (
             not isinstance(topics, list)
             or not topics
@@ -248,17 +263,35 @@ def block_transfers(block: dict, token: str) -> list[dict]:
     return events
 
 
-def window_transfers(
-    portal: Portal, token: str, start: int, end: int, limit: int
-) -> list[dict]:
-    """All Transfer events of one window; past `limit` raise TooManyEvents."""
-    events = []
-    blocks = portal.stream(transfer_query(token), start, end)
+def window_activity(
+    portal: Portal,
+    token: str,
+    start: int,
+    end: int,
+    limit: int,
+    pools: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Transfers and tracked-pool swaps of one window in a single stream.
+
+    Past `limit` Transfers, TooManyEvents is raised so the caller can split.
+    """
+    pools = pools or {}
+    events, swap_legs = [], []
+    blocks = portal.stream(transfer_query(token, swap_log_filter(pools)), start, end)
     try:
         for block in blocks:
-            events.extend(block_transfers(block, token))
+            events.extend(block_transfers(block, token, ignore=pools.keys()))
+            if pools:
+                swap_legs.extend(block_swaps(block, pools))
             if len(events) > limit and end > start:
                 raise TooManyEvents(len(events))
     finally:
         blocks.close()  # closes the open HTTP response when stopping early
-    return events
+    return events, swap_legs
+
+
+def window_transfers(
+    portal: Portal, token: str, start: int, end: int, limit: int
+) -> list[dict]:
+    """All Transfer events of one window; past `limit` raise TooManyEvents."""
+    return window_activity(portal, token, start, end, limit)[0]

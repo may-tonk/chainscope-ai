@@ -64,6 +64,12 @@ CLI / 配置 → 固定范围分页采集 → 精确解析 → 回执核验
 | `scan_jobs` | 长期采集任务：一个代币一个任务，记录起点、窗口大小、解析版本和连续水位 `verified_through` |
 | `coverage_windows` | 任务的覆盖窗口（两端包含）：状态、尝试次数、事件数、金额合计和指纹；窗口就是断点 |
 | `window_events` | 事件与窗口的关联；同一窗口重采不会新增行 |
+| `window_diffs` | 与 Alchemy 对账或复查发现的差异 |
+| `dex_pools` | 任务跟踪的交易池（PancakeSwap V2/V3 工厂发现或手工添加）及是否启用 |
+| `swap_events` | 跟踪池子的买卖：方向、代币和报价币数量、交易发起人、归属可信度 |
+| `address_balances` | 由 Transfer 累加的持仓，最高到 `scan_jobs.balances_through` |
+| `address_info` / `address_labels` | 是否合约（eth_getCode）、地址标签（来源和是否人工核实） |
+| `market_snapshots` / `pool_snapshots` / `pool_ohlcv` | CoinGecko 行情、池子价格与储备核对、4 小时 K 线（第三方，仅供参考） |
 
 `amount_raw` 使用规范十进制字符串 `VARCHAR(78)` 保存完整 uint256，数据库 CHECK 限制格式与上限。MySQL DECIMAL 的精度不足以覆盖完整 uint256；准确汇总由 Python 整数完成，不能直接通过 `SUM(amount_raw)` 隐式转换。
 
@@ -87,12 +93,18 @@ CLI / 配置 → 固定范围分页采集 → 精确解析 → 回执核验
 | `query` | 按北京时间 [from, to) 统计转账，超出水位时标明部分覆盖 |
 | `report` | 各表存储占用与三类查询耗时、所用索引 |
 | `verify-job` | 从 MySQL 重新计算每个完成窗口并核对指纹 |
+| `pools discover/list/add/enable/disable` | 发现或管理交易池；启用后从池子创建区块起重做窗口以补齐买卖 |
+| `holders` | 持仓排行（默认前 80），附标签、是否合约、占比；`--at-block` 查历史 |
+| `holders-verify` | 在水位区块用链上 totalSupply 和 balanceOf 核对持仓，并记录是否合约 |
+| `labels-import` | 从 `config/address_labels.toml` 导入地址标签 |
+| `market` | 保存 CoinGecko 价格/市值/24h 成交量、GeckoTerminal 池子行情和 4h K 线，并与链上价格比对 |
 
 ### 长期采集 BEM
 
 ```powershell
-uv run --all-extras --locked chainscope init-db        # 升级到 0004
+uv run --all-extras --locked chainscope init-db        # 升级到 0005
 uv run --all-extras --locked chainscope job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a
+uv run --all-extras --locked chainscope pools discover --job bem
 uv run --all-extras --locked chainscope sync --job bem --max-minutes 30
 uv run --all-extras --locked chainscope status --job bem
 ```
@@ -102,6 +114,8 @@ uv run --all-extras --locked chainscope status --job bem
 - 单窗口事件超过 `--event-limit`（默认 5 万）时自动对半拆分；每个窗口一个事务，批量查重和写入，死锁/断线有限重试，提交确认丢失时以数据库窗口状态为准。
 - 入库后从 MySQL 流式读回，按数量、金额合计和指纹核对。
 - 只处理已最终确认的区块（SQD finalized 与 Alchemy finalized 取较小值）。默认每个窗口都与 Alchemy 对账并抽查 3 笔回执，不一致时记录到 `window_diffs` 并停止推进。
+- 同一次 Portal 请求同时取 Transfer 和已启用池子的 Swap；买卖按池子视角判断（池子付出代币即买入），交易人是交易发起地址，同一交易内的 Transfer 用来判断归属是直接、经路由还是不确定。
+- 持仓只累加到连续水位，水位回退时自动全量重建；`holders-verify` 不一致通常说明是反射/分红型代币或起点晚于部署。
 - 运行、定时任务、备份恢复和故障注入演练见 [运行与验收手册](docs/operations.md)；方案见 [BEM 采集解决方案](docs/BEM采集解决方案-2026-10-15.md)。
 
 ## 可选调试归档
