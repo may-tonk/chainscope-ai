@@ -17,3 +17,5 @@ Navicat 用于连接数据库和检查结果；正式结构变更必须保留迁
 2026-10-15 新增 `0004_reconcile_amounts.py`：coverage_windows 增加 receipt_checked，transfer_events 增加生成列 amount_len 和金额排序索引，新建 window_diffs 记录对账差异。
 
 2026-10-15 新增 `0005_dex_holders_market.py`：scan_jobs 增加 balances_through，coverage_windows 增加 swap_count；新建 dex_pools、swap_events、address_balances（DECIMAL(65,0)，超过 65 位的金额会被拒绝累计）、address_info、address_labels、market_snapshots、pool_snapshots、pool_ohlcv。只新增表和可空列，已有数据不变，执行一次 `init-db` 即可升级。
+
+2026-10-15 新增 `0006_review_fixes.py`（评审修正）：scan_jobs 增加 deploy_block、end_block，coverage_windows 增加 fingerprint_version、pool_set，四列都可空。只加列，不改已有行。已有窗口的 fingerprint_version 为空，表示用第 1 版指纹（不含区块号）计算，verify-job 按这一版本核对，不需要重算；新窗口用第 2 版（含区块号）。已有任务的 deploy_block 为空时，query 不会把起点之前的区块说成"没有事件"，只标为未采集。

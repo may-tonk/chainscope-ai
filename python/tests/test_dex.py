@@ -339,7 +339,7 @@ def test_pools_discovered_later_backfill_swaps_without_duplicates(mysql_engine):
         (POOL, True),
         (JUNK, False),  # unknown quote token: waits for a person to enable it
     ]
-    assert found["windows_reset"] == {POOL: 3}
+    assert found["windows_reset"] == 3
     assert job_status(engine, "bem")["verified_through"] is None
 
     second = run(engine, chain)
@@ -406,9 +406,10 @@ def test_balances_top_holders_and_history(mysql_engine):
 
     # Refreshing again adds nothing; a rewind forces a rebuild with equal results.
     assert refresh_balances(engine, "bem")["blocks_added"] == 0
+    # A short rewind subtracts the rewound blocks in the same transaction.
     redo_job(engine, "bem", first=15, last=24)
     with engine.connect() as connection:
-        assert connection.scalar(sa.select(jobs.c.balances_through)) is None
+        assert connection.scalar(sa.select(jobs.c.balances_through)) == 14
     run(engine, chain)
     again = top_holders(engine, "bem")
     assert [h["balance_raw"] for h in again["top"]] == ["560", "310", "130"]

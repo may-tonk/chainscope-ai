@@ -83,6 +83,7 @@ def transfer_totals(
             event["from_address"],
             event["to_address"],
             event["amount"],
+            event["block_number"],
         )
     return tally, pages
 

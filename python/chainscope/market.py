@@ -6,6 +6,7 @@ compared with GeckoTerminal's, so a stale or wrong aggregate shows up as a
 deviation instead of passing silently.
 """
 
+import json
 import time
 from datetime import UTC, datetime
 from decimal import Context, Decimal, InvalidOperation, localcontext
@@ -19,6 +20,7 @@ from .errors import ChainScopeError
 from .jobs import load_job
 from .models import market_snapshots, pool_ohlcv, pool_snapshots
 from .parser import quantity
+from .rpc_client import read_limited
 
 COINGECKO = "https://api.coingecko.com/api/v3"
 GECKOTERMINAL = "https://api.geckoterminal.com/api/v2"
@@ -27,6 +29,7 @@ DECIMALS = "0x313ce567"
 PRICE = Decimal("1e-30")
 USD = Decimal("0.01")
 MAX_DEVIATION_PCT = 2
+MAX_BYTES = 8 * 1024 * 1024
 # 30 decimal places plus the integer part exceed the default 28 digits.
 WIDE = Context(prec=80)
 
@@ -57,33 +60,36 @@ class Http:
                     self._sleep(gap)
             self._last = self._clock()
             self.requests += 1
+            host = url.split("/")[2]
             try:
-                response = self._client.get(url, params=params, headers=headers)
+                with self._client.stream(
+                    "GET", url, params=params, headers=headers
+                ) as response:
+                    status = response.status_code
+                    after = response.headers.get("Retry-After", "").strip()
+                    content = (
+                        read_limited(response, MAX_BYTES, f"{host}: 响应超过 8 MiB")
+                        if status == 200
+                        else b""
+                    )
             except httpx.TransportError:
                 if attempt == 3:
-                    raise ChainScopeError(
-                        f"{url.split('/')[2]}: 网络连接失败"
-                    ) from None
+                    raise ChainScopeError(f"{host}: 网络连接失败") from None
                 self._sleep(2**attempt)
                 continue
-            if response.status_code in (429, 500, 502, 503, 504) and attempt < 3:
-                after = response.headers.get("Retry-After", "").strip()
+            if status in (429, 500, 502, 503, 504) and attempt < 3:
                 self._sleep(
                     min(int(after), 120) if after.isdigit() else 2 ** (attempt + 2)
                 )
                 continue
-            if response.status_code == 404:
+            if status == 404:
                 return None
-            if response.status_code != 200:
-                raise ChainScopeError(
-                    f"{url.split('/')[2]}: HTTP {response.status_code}"
-                )
+            if status != 200:
+                raise ChainScopeError(f"{host}: HTTP {status}")
             try:
-                return response.json()
+                return json.loads(content)
             except ValueError:
-                raise ChainScopeError(
-                    f"{url.split('/')[2]}: 返回内容不是 JSON"
-                ) from None
+                raise ChainScopeError(f"{host}: 返回内容不是 JSON") from None
         raise AssertionError("unreachable retry state")
 
 

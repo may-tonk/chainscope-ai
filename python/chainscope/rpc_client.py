@@ -1,5 +1,6 @@
 """Small synchronous JSON-RPC client with bounded, explicit retries."""
 
+import json
 import time
 from collections import Counter
 from typing import Any
@@ -24,12 +25,32 @@ COMPUTE_UNITS = {
 }
 
 
-def retry_wait(response: httpx.Response, attempt: int) -> float:
+def retry_wait(headers, attempt: int) -> float:
     """Server-provided Retry-After when present, else exponential backoff."""
-    value = response.headers.get("Retry-After", "").strip()
+    if isinstance(headers, httpx.Response):
+        headers = headers.headers
+    value = headers.get("Retry-After", "").strip()
     if value.isdigit():
         return min(int(value), MAX_WAIT_SECONDS)
     return min(2**attempt, MAX_WAIT_SECONDS)
+
+
+def read_limited(response: httpx.Response, limit: int, message: str) -> bytes:
+    """Read a streamed body, failing as soon as it passes `limit` bytes.
+
+    A declared Content-Length over the limit fails before reading; a missing
+    or false one (chunked, compressed or lying) is caught by counting the bytes
+    actually received, so memory never holds more than about one chunk extra.
+    """
+    size = response.headers.get("Content-Length", "")
+    if size.isdigit() and int(size) > limit:
+        raise ChainScopeError(message)
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        body += chunk
+        if len(body) > limit:
+            raise ChainScopeError(message)
+    return bytes(body)
 
 
 class RpcClient:
@@ -56,11 +77,10 @@ class RpcClient:
     def call(self, method: str, params: list) -> Any:
         self._id += 1
         payload = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
-        self.calls[method] += 1
         for attempt in range(3):
             self.requests += 1
             try:
-                response = self._client.post(self._url, json=payload)
+                status, headers, content = self._post(payload)
             except (httpx.TimeoutException, httpx.NetworkError):
                 if attempt == 2:
                     raise ChainScopeError(
@@ -68,20 +88,17 @@ class RpcClient:
                     ) from None
                 self._sleep(2**attempt)
                 continue
-            if response.status_code == 429:
+            if status == 429:
                 self.rate_limited += 1
-            if response.status_code in RETRY_STATUS and attempt < 2:
-                self._sleep(retry_wait(response, attempt))
+            if status in RETRY_STATUS and attempt < 2:
+                self._sleep(retry_wait(headers, attempt))
                 continue
-            if response.status_code != 200:
-                raise ChainScopeError(f"{method}: HTTP {response.status_code}")
-            size = response.headers.get("Content-Length", "")
-            if (size.isdigit() and int(size) > MAX_RESPONSE_BYTES) or len(
-                response.content
-            ) > MAX_RESPONSE_BYTES:
-                raise ChainScopeError(f"{method}: 响应超过 16 MiB 上限")
+            if status != 200:
+                raise ChainScopeError(f"{method}: HTTP {status}")
+            # Answered requests are what the provider bills; count them here.
+            self.calls[method] += 1
             try:
-                body = response.json()
+                body = json.loads(content)
             except ValueError:
                 raise ChainScopeError(f"{method}: 返回内容不是 JSON") from None
             if (
@@ -105,6 +122,16 @@ class RpcClient:
                 )
             return body["result"]
         raise AssertionError("unreachable retry state")
+
+    def _post(self, payload: dict) -> tuple[int, httpx.Headers, bytes]:
+        """POST and read the body, stopping as soon as it passes the size limit."""
+        with self._client.stream("POST", self._url, json=payload) as response:
+            if response.status_code != 200:
+                return response.status_code, response.headers, b""
+            body = read_limited(
+                response, MAX_RESPONSE_BYTES, "RPC 响应超过 16 MiB 上限"
+            )
+            return response.status_code, response.headers, body
 
     def compute_units(self) -> int:
         """Estimated Alchemy compute units for the calls made so far."""

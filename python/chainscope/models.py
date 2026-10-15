@@ -128,6 +128,11 @@ jobs = sa.Table(
     sa.Column("token_decimals", mysql.TINYINT(unsigned=True)),
     sa.Column("source", sa.String(16), nullable=False),
     sa.Column("start_block", mysql.BIGINT(unsigned=True), nullable=False),
+    # First block holding the contract code (eth_getCode); NULL if not measured.
+    # Only blocks before it are known to have no events.
+    sa.Column("deploy_block", mysql.BIGINT(unsigned=True)),
+    # Last block to collect; NULL means keep following the finalized head.
+    sa.Column("end_block", mysql.BIGINT(unsigned=True)),
     sa.Column("window_size", mysql.INTEGER(unsigned=True), nullable=False),
     sa.Column("parser_version", mysql.SMALLINT(unsigned=True), nullable=False),
     # Highest block such that every window from start_block up to it is done.
@@ -159,6 +164,10 @@ windows = sa.Table(
     sa.Column("inserted_count", mysql.INTEGER(unsigned=True)),
     sa.Column("amount_sum", mysql.VARCHAR(90, charset="ascii", collation="ascii_bin")),
     sa.Column("fingerprint", mysql.BINARY(32)),
+    # NULL for windows stored before version 2 existed, which means version 1.
+    sa.Column("fingerprint_version", mysql.SMALLINT(unsigned=True)),
+    # Hash of the enabled pools whose swaps this window holds.
+    sa.Column("pool_set", mysql.CHAR(16, charset="ascii", collation="ascii_bin")),
     sa.Column("source_head", mysql.BIGINT(unsigned=True)),
     sa.Column("parser_version", mysql.SMALLINT(unsigned=True)),
     sa.Column("reconcile", sa.String(16)),

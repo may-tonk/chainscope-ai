@@ -9,16 +9,28 @@ from datetime import UTC, datetime
 import httpx
 
 from .dex import block_swaps, swap_log_filter
-from .errors import ChainScopeError
+from .errors import BlockTooLarge, ChainScopeError
 from .parser import ADDRESS, HASH, fixed_hex, quantity
+from .rpc_client import read_limited
 from .validator import TRANSFER_TOPIC
 
 DEFAULT_PORTAL = "https://portal.sqd.dev"
 DEFAULT_DATASET = "binance-mainnet"
-# Bump when parsing rules change, so affected windows can be found and redone.
+# One version for both parsers that read a window's response (Transfer and
+# Swap, which arrive in the same request). Bump it when either changes; each
+# window records the version that actually parsed it, and `redo` without a
+# range resets only windows below the current version.
 PARSER_VERSION = 1
 RETRY_STATUS = (429, 500, 502, 503, 504)
-MAX_LINE_CHARS = 8 * 1024 * 1024
+# One line of the stream is one block. 32 MiB holds about 70,000 Transfer logs,
+# more than BLOCK_HARD_LIMIT, so the item limit is what normally stops a block.
+MAX_LINE_BYTES = 32 * 1024 * 1024
+MAX_GET_BYTES = 1024 * 1024  # heads and time lookups are tiny JSON objects
+# A block cannot be split, so a single-block window may pass event_limit up to
+# this many Transfers plus swaps; beyond it the window is quarantined. Equal to
+# the default event limit: no window ever holds more than about 50,000 items,
+# measured at roughly 3 KB of Python memory each (about 140 MiB peak).
+BLOCK_HARD_LIMIT = 50_000
 BLOCK_FIELDS = {"number": True, "hash": True, "timestamp": True}
 LOG_FIELDS = {
     "logIndex": True,
@@ -31,6 +43,10 @@ LOG_FIELDS = {
 
 class TooManyEvents(Exception):
     """A window holds more events than its limit; the caller splits it."""
+
+
+class LineTooLong(ChainScopeError):
+    """One block's JSON line passed MAX_LINE_BYTES."""
 
 
 class Portal:
@@ -88,21 +104,29 @@ class Portal:
         while True:
             self._pace()
             try:
-                response = self._client.get(url)
+                with self._client.stream("GET", url) as response:
+                    status = response.status_code
+                    retry_after = response.headers.get("Retry-After")
+                    content = (
+                        read_limited(
+                            response, MAX_GET_BYTES, f"Portal {path}: 响应超过 1 MiB"
+                        )
+                        if status == 200
+                        else b""
+                    )
+                    self.stats["bytes"] += response.num_bytes_downloaded
             except httpx.TransportError:
                 failures += 1
                 self._backoff(failures, path)
                 continue
-            if response.status_code in RETRY_STATUS:
+            if status in RETRY_STATUS:
                 failures += 1
-                retry_after = response.headers.get("Retry-After")
-                self._backoff(failures, path, response.status_code, retry_after)
+                self._backoff(failures, path, status, retry_after)
                 continue
-            if response.status_code != 200:
-                raise ChainScopeError(f"Portal {path}: HTTP {response.status_code}")
-            self.stats["bytes"] += response.num_bytes_downloaded
+            if status != 200:
+                raise ChainScopeError(f"Portal {path}: HTTP {status}")
             try:
-                return response.json()
+                return json.loads(content)
             except ValueError:
                 raise ChainScopeError(f"Portal {path}: 返回内容不是 JSON") from None
 
@@ -110,10 +134,13 @@ class Portal:
         return self.get(f"datasets/{self.dataset}/{path}")
 
     def finalized_head(self) -> int:
-        head = self.dataset_get("finalized-head") or self.dataset_get("head")
+        """The dataset's finalized height; never the unfinalized head instead."""
+        head = self.dataset_get("finalized-head")
         number = head.get("number") if isinstance(head, dict) else None
         if not isinstance(number, int) or isinstance(number, bool):
-            raise ChainScopeError("Portal 没有返回数据集最终确认高度")
+            raise ChainScopeError(
+                "Portal 没有返回数据集最终确认高度；不改用未确认高度，本次停止"
+            )
         return number
 
     def block_at(self, timestamp: int) -> int:
@@ -140,11 +167,7 @@ class Portal:
                     status = response.status_code
                     retry_after = response.headers.get("Retry-After")
                     if status == 200:
-                        for line in response.iter_lines():
-                            if len(line) > MAX_LINE_CHARS:
-                                raise ChainScopeError(
-                                    "Portal 单个区块响应超过 8 MiB 上限"
-                                )
+                        for line in bounded_lines(response, MAX_LINE_BYTES):
                             if not line.strip():
                                 continue
                             block = portal_block(line)
@@ -173,6 +196,30 @@ class Portal:
             if status == 409:
                 raise ChainScopeError("Portal: finalized 流返回链重组（HTTP 409）")
             raise ChainScopeError(f"Portal stream: HTTP {status}")
+
+
+def bounded_lines(response: httpx.Response, limit: int) -> Iterator[str]:
+    """Lines of a streamed body; a line is refused as soon as it passes `limit`.
+
+    The check runs while reading, so an oversized block never sits whole in
+    memory; leaving the generator closes the response.
+    """
+    buffer = bytearray()
+    for chunk in response.iter_bytes():
+        start = 0
+        while True:
+            end = chunk.find(b"\n", start)
+            piece = chunk[start:] if end < 0 else chunk[start:end]
+            if len(buffer) + len(piece) > limit:
+                raise LineTooLong(f"Portal 单个区块响应超过 {limit // 2**20} MiB 上限")
+            buffer += piece
+            if end < 0:
+                break
+            yield buffer.decode()
+            buffer.clear()
+            start = end + 1
+    if buffer:
+        yield buffer.decode()
 
 
 def portal_block(line: str) -> dict:
@@ -270,24 +317,45 @@ def window_activity(
     end: int,
     limit: int,
     pools: dict | None = None,
+    hard_limit: int = BLOCK_HARD_LIMIT,
 ) -> tuple[list[dict], list[dict]]:
     """Transfers and tracked-pool swaps of one window in a single stream.
 
-    Past `limit` Transfers, TooManyEvents is raised so the caller can split.
+    `limit` counts everything held in memory (Transfers plus swaps). Past it,
+    TooManyEvents is raised so the caller can split the window. A one-block
+    window cannot be split: it may hold up to `hard_limit`, then BlockTooLarge.
     """
     pools = pools or {}
     events, swap_legs = [], []
     blocks = portal.stream(transfer_query(token, swap_log_filter(pools)), start, end)
     try:
-        for block in blocks:
+        for block in _blocks_or_split(blocks, start, end):
             events.extend(block_transfers(block, token, ignore=pools.keys()))
             if pools:
                 swap_legs.extend(block_swaps(block, pools))
-            if len(events) > limit and end > start:
-                raise TooManyEvents(len(events))
+            held = len(events) + len(swap_legs)
+            if held > limit and end > start:
+                raise TooManyEvents(held)
+            if held > hard_limit:
+                raise BlockTooLarge(
+                    f"区块 {start} 有 {held} 条转账和交易，超过单区块硬上限 {hard_limit}；"
+                    "已隔离该窗口，可调高 --block-hard-limit 后用 redo 重做"
+                )
     finally:
         blocks.close()  # closes the open HTTP response when stopping early
     return events, swap_legs
+
+
+def _blocks_or_split(blocks, start: int, end: int):
+    """A block too long to read is too many items: split, or quarantine one block."""
+    try:
+        yield from blocks
+    except LineTooLong as exc:
+        if end > start:
+            raise TooManyEvents(None) from None
+        raise BlockTooLarge(
+            f"区块 {start} 的响应超过单行上限（{exc}）；已隔离该窗口"
+        ) from None
 
 
 def window_transfers(

@@ -18,7 +18,14 @@ from chainscope.jobs import (
     plan_ranges,
     split_range,
 )
-from chainscope.models import batches, jobs, transfers, window_events, windows
+from chainscope.models import (
+    batches,
+    jobs,
+    transfers,
+    window_diffs,
+    window_events,
+    windows,
+)
 from chainscope.sqd import Portal
 from chainscope.sync import sync_job
 from chainscope.validator import TRANSFER_TOPIC
@@ -261,10 +268,16 @@ def test_conflicting_event_rolls_back_the_whole_window(mysql_engine):
         connection.execute(window_events.delete())
         connection.execute(windows.update().values(status="pending"))
         connection.execute(jobs.update().values(verified_through=None))
-    with pytest.raises(ChainScopeError, match="内容冲突"):
-        run(engine, chain)
+    # A conflict with stored data is quarantined with evidence, not retried.
+    summary = run(engine, chain)
+    assert [q["error_type"] for q in summary["quarantined"]] == ["EventConflict"]
     assert count(engine, window_events) == 0
     assert window_rows(engine) == [(10, 14, "failed")]
+    with engine.connect() as connection:
+        kinds = connection.scalars(sa.select(window_diffs.c.kind)).all()
+    assert kinds == ["field_conflict"]
+    assert run(engine, chain)["windows_done"] == 0  # stays quarantined
+    assert job_status(engine, "bem")["failed_windows"][0]["quarantined"]
 
 
 @requires_mysql

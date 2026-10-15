@@ -85,12 +85,12 @@ CLI / 配置 → 固定范围分页采集 → 精确解析 → 回执核验
 | `init-db` | 初始化指定数据库并执行迁移 |
 | `fetch` | 采集、核验并保存有限额的调试响应，不入库 |
 | `inspect` | 检查历史 CSV 的有限样本，不重新采集 |
-| `job-create` | 创建长期采集任务；省略 `--start-block` 时用 eth_getCode 二分查找部署区块 |
-| `sync` | 从 SQD Portal 按窗口采集到最终确认高度，逐窗入库并推进水位；可随时中断，下次自动续采 |
-| `status` | 查看任务水位、剩余区块、失败窗口、对账统计；`--max-lag-blocks` 超出时退出码 2 |
-| `recheck` | 随机复查已完成窗口，变化的窗口标为失败并回退水位 |
-| `redo` | 把旧解析版本或指定区块范围的窗口重置为待采集 |
-| `query` | 按北京时间 [from, to) 统计转账，超出水位时标明部分覆盖 |
+| `job-create` | 创建长期采集任务；起点可用 `--start-block` 或北京时间 `--from`，`--to` 固定终点（不含）；总会记录部署区块 |
+| `sync` | 从 SQD Portal 按窗口采集到最终确认高度，逐窗入库并推进水位；可随时中断，下次自动续采；有窗口被隔离时退出码 3 |
+| `status` | 读取当前最终确认高度后计算落后区块；`--max-lag-blocks` 超出时退出码 2，读不到高度时退出码 4 |
+| `recheck` | 随机重新拉取已完成窗口，逐字段比对 Transfer（含区块号、哈希、时间）和 Swap；有变化的窗口隔离并回退水位 |
+| `redo` | 把旧解析版本或指定区块范围的窗口重置为待采集；指定范围也会放行被隔离的窗口 |
+| `query` | 按北京时间 [from, to) 统计转账和买卖；只统计连续水位以内的区块，并分段说明部署前、未采集、已核实、未核实 |
 | `report` | 各表存储占用与三类查询耗时、所用索引 |
 | `verify-job` | 从 MySQL 重新计算每个完成窗口并核对指纹 |
 | `pools discover/list/add/enable/disable` | 发现或管理交易池；启用后从池子创建区块起重做窗口以补齐买卖 |
@@ -102,7 +102,7 @@ CLI / 配置 → 固定范围分页采集 → 精确解析 → 回执核验
 ### 长期采集 BEM
 
 ```powershell
-uv run --all-extras --locked chainscope init-db        # 升级到 0005
+uv run --all-extras --locked chainscope init-db        # 升级到 0006
 uv run --all-extras --locked chainscope job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a
 uv run --all-extras --locked chainscope pools discover --job bem
 uv run --all-extras --locked chainscope sync --job bem --max-minutes 30
@@ -113,9 +113,12 @@ uv run --all-extras --locked chainscope status --job bem
 - 窗口按区块升序处理，失败窗口优先重试；水位只沿连续完成的窗口推进，不会越过空洞。没有事件的窗口也记录为完成。
 - 单窗口事件超过 `--event-limit`（默认 5 万）时自动对半拆分；每个窗口一个事务，批量查重和写入，死锁/断线有限重试，提交确认丢失时以数据库窗口状态为准。
 - 入库后从 MySQL 流式读回，按数量、金额合计和指纹核对。
-- 只处理已最终确认的区块（SQD finalized 与 Alchemy finalized 取较小值）。默认每个窗口都与 Alchemy 对账并抽查 3 笔回执，不一致时记录到 `window_diffs` 并停止推进。
+- 只处理已最终确认的区块（SQD finalized 与 Alchemy finalized 取较小值）。任何一方读不到最终确认高度就不采集，不改用未确认高度；`--no-reconcile` 时输出 `finality: sqd_only`。
+- 默认每个窗口都与 Alchemy 对账，并抽查 3 笔 Transfer 回执和 3 笔 Swap 回执。数据不一致（对账、回执、写入后读回、与已存内容冲突、单区块超限）的窗口被隔离：标为失败、差异写入 `window_diffs`、不自动重试，水位停在它之前，其他窗口照常采集；查明原因后用 `redo --from-block --to-block` 放行。网络或数据库暂时失败不算不一致，下次运行自动重试。
 - 同一次 Portal 请求同时取 Transfer 和已启用池子的 Swap；买卖按池子视角判断（池子付出代币即买入），交易人是交易发起地址，同一交易内的 Transfer 用来判断归属是直接、经路由还是不确定。
-- 持仓只累加到连续水位，水位回退时自动全量重建；`holders-verify` 不一致通常说明是反射/分红型代币或起点晚于部署。
+- 持仓只累加到连续水位，只计入窗口关联的 Transfer。水位回退不超过 20 万块时在同一事务里减去回退部分，更长时清空后分块重建；每块一个事务并锁住任务行，并发刷新也只会加一次。`holders-verify` 不一致通常说明是反射/分红型代币或起点晚于部署。
+- 金额按原始整数字符串保存（最多 78 位，覆盖 uint256）。`query` 的合计用 Python 整数逐行相加，任意长度都精确；持仓缓存用 MySQL DECIMAL(65,0)，可能超过时拒绝计算并说明原因，不会截断。
+- 内存上限：一个窗口最多约 5 万条（Transfer+Swap，`--event-limit`），超过自动拆分；单个区块不能拆，上限也是 5 万条（`--block-hard-limit`），超过就隔离。实测每条约 3 KB，5 万条约 140 MiB。响应大小在读取过程中检查：RPC 16 MiB、Portal 每个区块 32 MiB、其他 Portal 请求 1 MiB、行情接口 8 MiB。
 - 运行、定时任务、备份恢复和故障注入演练见 [运行与验收手册](docs/operations.md)；方案见 [BEM 采集解决方案](docs/BEM采集解决方案-2026-10-15.md)。
 
 ## 可选调试归档
@@ -143,6 +146,8 @@ Remove-Item Env:/CHAINSCOPE_TEST_MYSQL
 # 观察网络、超时、限流、RPC 错误和空结果的可控模拟
 uv run --all-extras --locked python python/tools/demo_rpc_failures.py --scenario all
 ```
+
+2026-10-15 评审修正后：**153 项测试在 MySQL 8.4 和 8.0.43 上都通过**（另有 5 项 subtests），全部是模拟数据源，没有访问真实 SQD、Alchemy 或行情接口。各评审项的状态见 [评审修正状态](docs/评审修正状态-2026-10-15.md)。
 
 2026-10-13 本地验收：包含真实 MySQL 的 **36 项测试通过，另有 5 项 subtests 通过**；Ruff 检查通过。覆盖精确金额、分页重复、错误响应、回执冲突、数据库约束、事务回滚、默认零归档、归档容量及并发写入、提交后归档失败等场景。
 
@@ -173,8 +178,8 @@ raw/                可选调试归档，运行时创建，不提交
 
 ## 当前边界与后续工作
 
-- `collect` 仍在整个有限批次内累积并逐条查重/写入；长期采集请用 `sync`（按窗口批量写入）。
+- `collect` 与 `sync` 的边界：`collect` 是早期的固定区间工具（用 Alchemy 转账接口取数据，整批在内存中处理），写入的事件不属于任何任务，`query`、`holders` 和 `verify-job` 都不会计入。BEM 的长期数据只通过 `sync` 采集；`collect` 只用于小范围排查。
 - `sync` 已实现持久化进度、自动续跑、连续水位、跨数据源对账和复查；已最终确认区块的冲突只记录并停止，不自动修复；规模验收需在真实数据上按运行手册完成。
 - 回执对照验证返回事件，不能证明供应商没有遗漏；金额总和是读回计算，不是独立完整性对账。
-- 结束区块要求至少 12 个后续区块，只是当前链头避让规则，不构成最终性证明。
+- `collect` 的结束区块要求至少 12 个后续区块，只是链头避让规则，不构成最终性证明；`sync` 用的是最终确认高度。
 - 当前提供单链、单合约、固定范围 CLI；业务 SQL、API、调度、监控和部署继续在同一项目扩展。
