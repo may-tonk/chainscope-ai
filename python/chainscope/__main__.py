@@ -1,4 +1,4 @@
-"""CLI for bounded collection, MySQL persistence and evidence verification."""
+"""CLI for collection jobs, MySQL persistence and evidence verification."""
 
 import argparse
 import csv
@@ -18,10 +18,12 @@ from .database import (
     verify_batch,
 )
 from .errors import ChainScopeError
+from .jobs import job_status
 from .parser import quantity
 from .pipeline import run_collection
 from .records import inspect_csv
 from .rpc_client import RpcClient
+from .sync import create, run_sync
 
 
 def main() -> int:
@@ -66,12 +68,53 @@ def main() -> int:
         )
     verify = commands.add_parser("verify", help="读取 MySQL 批次并精确计算原始金额汇总")
     verify.add_argument("--batch-id", required=True)
+    job = commands.add_parser("job-create", help="创建长期采集任务（一个代币一个任务）")
+    job.add_argument("--job", default="bem", help="任务名，默认 bem")
+    job.add_argument("--token", required=True, help="BSC token 合约地址")
+    job.add_argument(
+        "--start-block", type=int, help="起始区块；省略时用 eth_getCode 查找部署区块"
+    )
+    job.add_argument(
+        "--window-size", type=int, default=50_000, help="每个窗口的区块数，默认 50000"
+    )
+    sync = commands.add_parser(
+        "sync", help="按窗口采集到最终确认高度；随时可中断，下次自动续采"
+    )
+    sync.add_argument("--job", default="bem")
+    sync.add_argument("--max-windows", type=int, help="本次最多处理的窗口数")
+    sync.add_argument("--max-minutes", type=float, help="本次运行时间上限（分钟）")
+    sync.add_argument(
+        "--event-limit",
+        type=int,
+        default=50_000,
+        help="单个窗口最多事件数，超过则自动拆分窗口",
+    )
+    status = commands.add_parser("status", help="查看任务水位、积压和失败窗口")
+    status.add_argument("--job", default="bem")
     args = parser.parse_args()
     try:
         if args.command == "inspect":
             result = inspect_csv(args.input, args.limit)
         elif args.command == "init-db":
             result = initialize(load_settings())
+        elif args.command == "job-create":
+            result = create(
+                load_settings(),
+                args.job,
+                args.token,
+                start_block=args.start_block,
+                window_size=args.window_size,
+            )
+        elif args.command == "sync":
+            if args.event_limit < 1 or (args.max_windows or 1) < 1:
+                raise ChainScopeError("窗口数和事件上限必须为正数")
+            result = run_sync(
+                load_settings(),
+                args.job,
+                max_windows=args.max_windows,
+                max_seconds=None if args.max_minutes is None else args.max_minutes * 60,
+                event_limit=args.event_limit,
+            )
         elif args.command in ("collect", "fetch"):
             result = run_collection(
                 load_settings(),
@@ -90,6 +133,8 @@ def main() -> int:
             try:
                 if args.command == "verify":
                     result = verify_batch(engine, args.batch_id)
+                elif args.command == "status":
+                    result = job_status(engine, args.job)
                 else:
                     with RpcClient(settings.require_rpc()) as rpc:
                         chain_id = quantity(rpc.call("eth_chainId", []), "chain_id")
@@ -118,7 +163,7 @@ def main() -> int:
             f"操作失败（{type(exc).__name__}）；检查配置或原始批次文件", file=sys.stderr
         )
         return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     return 0
 
 
