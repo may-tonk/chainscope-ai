@@ -11,6 +11,17 @@ from .config import ROOT, Settings
 from .errors import ChainScopeError
 from .models import batch_events, batches, transfers
 
+SCHEMA_REVISION = "0003"
+SCHEMA_TABLES = (
+    "collection_batches",
+    "transfer_events",
+    "batch_events",
+    "scan_jobs",
+    "coverage_windows",
+    "window_events",
+    "alembic_version",
+)
+
 
 def engine_for(settings: Settings, *, server_only=False):
     return sa.create_engine(
@@ -43,16 +54,8 @@ def check_database(engine):
     return {
         "mysql_version": version,
         "migration_revision": revision,
-        "schema_ready": revision == "0002"
-        and all(
-            t in tables
-            for t in (
-                "collection_batches",
-                "transfer_events",
-                "batch_events",
-                "alembic_version",
-            )
-        ),
+        "schema_ready": revision == SCHEMA_REVISION
+        and all(t in tables for t in SCHEMA_TABLES),
     }
 
 
@@ -96,7 +99,9 @@ def utcnow():
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def start_batch(engine, batch_id, token, start, end, directory):
+def start_batch(
+    engine, batch_id, token, start, end, directory, *, provider="alchemy", job_id=None
+):
     with engine.begin() as connection:
         connection.execute(
             batches.insert().values(
@@ -105,10 +110,11 @@ def start_batch(engine, batch_id, token, start, end, directory):
                 token_address=token,
                 start_block=start,
                 end_block=end,
-                provider="alchemy",
+                provider=provider,
                 status="running",
                 started_at_utc=utcnow(),
                 raw_directory=str(directory) if directory is not None else None,
+                job_id=job_id,
             )
         )
 

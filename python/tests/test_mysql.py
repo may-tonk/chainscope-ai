@@ -1,20 +1,18 @@
 """Opt-in tests against real MySQL; own temporary database, no user data."""
 
-import os
 from dataclasses import replace
 from datetime import datetime
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+from conftest import requires_mysql
 from sqlalchemy.exc import DBAPIError
 from test_collection import RAW, TOKEN, capture_rpc
 
 from chainscope.config import load_settings
 from chainscope.database import (
-    engine_for,
     fail_batch,
-    initialize,
     start_batch,
     store_batch,
     verify_batch,
@@ -24,45 +22,7 @@ from chainscope.models import batch_events, batches, transfers
 from chainscope.parser import UINT256_MAX
 from chainscope.pipeline import run_collection
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("CHAINSCOPE_TEST_MYSQL") != "1",
-    reason="requires real MySQL credentials and CHAINSCOPE_TEST_MYSQL=1",
-)
-
-
-@pytest.fixture
-def mysql_engine():
-    settings = replace(load_settings(), mysql_database="chainscope_test_" + uuid4().hex)
-    owned = False
-    engine = None
-    try:
-        # Prove the generated name is absent before taking ownership.
-        server = engine_for(settings, server_only=True)
-        try:
-            with server.connect() as connection:
-                assert (
-                    settings.mysql_database
-                    not in sa.inspect(connection).get_schema_names()
-                )
-        finally:
-            server.dispose()
-        owned = True
-        assert initialize(settings)["schema_ready"]
-        assert initialize(settings)["schema_ready"]  # migration can run again
-        engine = engine_for(settings)
-        yield engine
-    finally:
-        if engine is not None:
-            engine.dispose()
-        if owned:
-            server = engine_for(settings, server_only=True)
-            try:
-                with server.connect() as connection:
-                    connection.execute(
-                        sa.text(f"DROP DATABASE `{settings.mysql_database}`")
-                    )
-            finally:
-                server.dispose()
+pytestmark = requires_mysql
 
 
 def event(amount=str(UINT256_MAX), tx="0x" + "4" * 64):
@@ -157,7 +117,7 @@ def test_default_collection_persists_without_any_json(
     with mysql_engine.connect() as connection:
         assert (
             connection.scalar(sa.text("SELECT version_num FROM alembic_version"))
-            == "0002"
+            == "0003"
         )
         assert connection.execute(
             sa.select(batches.c.raw_directory)
