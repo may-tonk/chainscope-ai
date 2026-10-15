@@ -4,14 +4,16 @@ from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.migration import MigrationContext
 from sqlalchemy.exc import SQLAlchemyError
 
 from .config import ROOT, Settings
 from .errors import ChainScopeError
-from .models import batch_events, batches, transfers
+from .models import batch_events, batches, metadata, transfers
 
-SCHEMA_REVISION = "0003"
+SCHEMA_REVISION = "0004"
 SCHEMA_TABLES = (
     "collection_batches",
     "transfer_events",
@@ -19,6 +21,7 @@ SCHEMA_TABLES = (
     "scan_jobs",
     "coverage_windows",
     "window_events",
+    "window_diffs",
     "alembic_version",
 )
 
@@ -42,7 +45,22 @@ def database_error(exc: SQLAlchemyError) -> ChainScopeError:
     )
 
 
-def check_database(engine):
+def schema_differences(connection) -> list[str]:
+    """Columns, indexes and constraints that differ from models.py."""
+    context = MigrationContext.configure(
+        connection, opts={"compare_type": True, "compare_server_default": False}
+    )
+    diffs = compare_metadata(context, metadata)
+    lines = []
+    for diff in diffs:
+        item = diff[0] if isinstance(diff, list) else diff
+        if item[0] == "remove_table" and item[1].name == "alembic_version":
+            continue
+        lines.append(" ".join(str(part) for part in item[:3])[:200])
+    return lines
+
+
+def check_database(engine, *, full: bool = False):
     with engine.connect() as connection:
         version = connection.scalar(sa.text("SELECT VERSION()"))
         tables = sa.inspect(connection).get_table_names()
@@ -51,12 +69,16 @@ def check_database(engine):
             if "alembic_version" in tables
             else None
         )
-    return {
-        "mysql_version": version,
-        "migration_revision": revision,
-        "schema_ready": revision == SCHEMA_REVISION
-        and all(t in tables for t in SCHEMA_TABLES),
-    }
+        ready = revision == SCHEMA_REVISION and all(t in tables for t in SCHEMA_TABLES)
+        result = {
+            "mysql_version": version,
+            "migration_revision": revision,
+            "schema_ready": ready,
+        }
+        if full and ready:
+            result["schema_differences"] = schema_differences(connection)
+            result["schema_ready"] = not result["schema_differences"]
+    return result
 
 
 def initialize(settings: Settings) -> dict:

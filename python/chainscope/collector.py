@@ -44,13 +44,12 @@ def next_page_key(result: dict, keys: set) -> str | None:
     return key
 
 
-def transfer_totals(
+def transfer_identities(
     rpc: RpcClient, token: str, start: int, end: int, *, max_pages: int = 100
-) -> tuple[Tally, int]:
-    """Alchemy's own count, amount sum and fingerprint for one block window."""
+) -> tuple[dict, int]:
+    """Alchemy's events for one block window, keyed by (tx_hash, log_index)."""
     params = transfer_params(token, start, end)
-    tally = Tally()
-    seen = {}
+    seen: dict = {}
     keys: set = set()
     for page in range(1, max_pages + 1):
         result = rpc.call("alchemy_getAssetTransfers", [params.copy()])
@@ -61,23 +60,31 @@ def transfer_totals(
         for raw in result["transfers"]:
             event = transfer_identity(raw, token, start, end)
             key = (event["tx_hash"], event["log_index"])
-            if key in seen:
-                if seen[key] != event:
-                    raise ChainScopeError("分页返回的同一事件内容冲突")
-                continue
+            if key in seen and seen[key] != event:
+                raise ChainScopeError("分页返回的同一事件内容冲突")
             seen[key] = event
-            tally.add(
-                event["tx_hash"],
-                event["log_index"],
-                event["from_address"],
-                event["to_address"],
-                event["amount"],
-            )
         key = next_page_key(result, keys)
         if key is None:
-            return tally, page
+            return seen, page
         params["pageKey"] = key
     raise ChainScopeError("对账达到分页上限但仍有下一页；请缩小窗口")
+
+
+def transfer_totals(
+    rpc: RpcClient, token: str, start: int, end: int, *, max_pages: int = 100
+) -> tuple[Tally, int]:
+    """Alchemy's own count, amount sum and fingerprint for one block window."""
+    seen, pages = transfer_identities(rpc, token, start, end, max_pages=max_pages)
+    tally = Tally()
+    for event in seen.values():
+        tally.add(
+            event["tx_hash"],
+            event["log_index"],
+            event["from_address"],
+            event["to_address"],
+            event["amount"],
+        )
+    return tally, pages
 
 
 def fetch_debug(

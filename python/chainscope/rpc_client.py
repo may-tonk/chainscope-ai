@@ -1,12 +1,35 @@
 """Small synchronous JSON-RPC client with bounded, explicit retries."""
 
 import time
+from collections import Counter
 from typing import Any
 
 import httpx
 
 from .archive import JsonArchive
 from .errors import ChainScopeError
+
+RETRY_STATUS = (429, 500, 502, 503, 504)
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_WAIT_SECONDS = 60
+# Alchemy compute units per method (official table, checked 2026-10-14).
+COMPUTE_UNITS = {
+    "alchemy_getAssetTransfers": 120,
+    "eth_blockNumber": 10,
+    "eth_call": 26,
+    "eth_chainId": 0,
+    "eth_getBlockByNumber": 20,
+    "eth_getCode": 20,
+    "eth_getTransactionReceipt": 20,
+}
+
+
+def retry_wait(response: httpx.Response, attempt: int) -> float:
+    """Server-provided Retry-After when present, else exponential backoff."""
+    value = response.headers.get("Retry-After", "").strip()
+    if value.isdigit():
+        return min(int(value), MAX_WAIT_SECONDS)
+    return min(2**attempt, MAX_WAIT_SECONDS)
 
 
 class RpcClient:
@@ -18,6 +41,8 @@ class RpcClient:
         self._owned = client is None
         self._sleep = sleep
         self.requests = 0
+        self.calls: Counter = Counter()
+        self.rate_limited = 0
         self._id = 0
         self.archive: JsonArchive | None = None
 
@@ -31,6 +56,7 @@ class RpcClient:
     def call(self, method: str, params: list) -> Any:
         self._id += 1
         payload = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
+        self.calls[method] += 1
         for attempt in range(3):
             self.requests += 1
             try:
@@ -42,11 +68,18 @@ class RpcClient:
                     ) from None
                 self._sleep(2**attempt)
                 continue
-            if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                self._sleep(2**attempt)
+            if response.status_code == 429:
+                self.rate_limited += 1
+            if response.status_code in RETRY_STATUS and attempt < 2:
+                self._sleep(retry_wait(response, attempt))
                 continue
             if response.status_code != 200:
                 raise ChainScopeError(f"{method}: HTTP {response.status_code}")
+            size = response.headers.get("Content-Length", "")
+            if (size.isdigit() and int(size) > MAX_RESPONSE_BYTES) or len(
+                response.content
+            ) > MAX_RESPONSE_BYTES:
+                raise ChainScopeError(f"{method}: 响应超过 16 MiB 上限")
             try:
                 body = response.json()
             except ValueError:
@@ -72,3 +105,7 @@ class RpcClient:
                 )
             return body["result"]
         raise AssertionError("unreachable retry state")
+
+    def compute_units(self) -> int:
+        """Estimated Alchemy compute units for the calls made so far."""
+        return sum(COMPUTE_UNITS.get(m, 26) * n for m, n in self.calls.items())

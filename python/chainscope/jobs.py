@@ -5,6 +5,8 @@ is collected and committed as a unit, so it is also the resume point. The job's
 `verified_through` only advances over an unbroken run of done windows.
 """
 
+import os
+import random
 from contextlib import contextmanager
 
 import sqlalchemy as sa
@@ -12,13 +14,27 @@ from sqlalchemy.exc import OperationalError
 
 from .database import utcnow
 from .errors import ChainScopeError
-from .models import batches, jobs, transfers, window_events, windows
+from .models import (
+    batches,
+    jobs,
+    transfers,
+    window_diffs,
+    window_events,
+    windows,
+)
 from .validator import Tally
 
 CHUNK = 1000
 # MySQL errors after which the whole window transaction can safely run again.
 RETRYABLE = {1205, 1213}  # lock wait timeout, deadlock
 LOST = {2006, 2013}  # server gone away, lost connection
+FAULT_EXIT = 75
+
+
+def fault(point: str) -> None:
+    """Crash on purpose at a named point, for recovery drills (CHAINSCOPE_FAULT)."""
+    if os.environ.get("CHAINSCOPE_FAULT") == point:
+        os._exit(FAULT_EXIT)
 
 
 def plan_ranges(next_start: int, head: int, size: int) -> list[tuple[int, int]]:
@@ -292,7 +308,9 @@ def _advance(connection, job_id: str) -> int | None:
     return through
 
 
-def _store(engine, job, window, attempt_id, events, tally, source_head) -> dict:
+def _store(
+    engine, job, window, attempt_id, events, tally, source_head, extra=None
+) -> dict:
     with engine.begin() as connection:
         locked = (
             connection.execute(
@@ -357,6 +375,7 @@ def _store(engine, job, window, attempt_id, events, tally, source_head) -> dict:
                 parser_version=job["parser_version"],
                 error_type=None,
                 updated_at_utc=now,
+                **(extra or {}),
             )
         )
         connection.execute(
@@ -371,6 +390,8 @@ def _store(engine, job, window, attempt_id, events, tally, source_head) -> dict:
             )
         )
         through = _advance(connection, job["job_id"])
+        fault("before_commit")
+    fault("after_commit")
     return {
         "inserted": len(fresh),
         "existing": len(events) - len(fresh),
@@ -389,12 +410,14 @@ def _committed(engine, job_id: str, start: int, attempt_id: str) -> bool:
 
 
 def store_window(
-    engine, job, window, attempt_id, events, tally, source_head, *, sleep
+    engine, job, window, attempt_id, events, tally, source_head, *, sleep, extra=None
 ) -> dict:
     """Commit one window atomically; retry deadlocks; resolve unknown commits."""
     for attempt in range(3):
         try:
-            return _store(engine, job, window, attempt_id, events, tally, source_head)
+            return _store(
+                engine, job, window, attempt_id, events, tally, source_head, extra
+            )
         except OperationalError as exc:
             code = exc.orig.args[0] if exc.orig is not None and exc.orig.args else None
             if code in LOST and _committed(
@@ -434,7 +457,7 @@ def window_tally(engine, job_id: str, start: int) -> Tally:
     return tally
 
 
-def job_status(engine, job_id: str) -> dict:
+def job_status(engine, job_id: str, *, max_lag_blocks: int | None = None) -> dict:
     with engine.connect() as connection:
         job = load_job(connection, job_id)
         counts = dict(
@@ -471,7 +494,20 @@ def job_status(engine, job_id: str) -> dict:
             .limit(10)
         ).mappings()
         failed = [dict(row) for row in failed]
+        reconcile = dict(
+            connection.execute(
+                sa.select(windows.c.reconcile, sa.func.count())
+                .where(windows.c.job_id == job_id, windows.c.status == "done")
+                .group_by(windows.c.reconcile)
+            ).all()
+        )
+        diffs = connection.scalar(
+            sa.select(sa.func.count())
+            .select_from(window_diffs)
+            .where(window_diffs.c.job_id == job_id)
+        )
     through = job["verified_through"]
+    lag = None if through is None or span[2] is None else span[2] - through
     return {
         "job_id": job_id,
         "token_address": job["token_address"],
@@ -486,6 +522,142 @@ def job_status(engine, job_id: str) -> dict:
             s: counts.get(s, 0) for s in ("done", "pending", "running", "failed")
         },
         "blocks_remaining": int(remaining),
-        "lag_blocks": None if through is None or span[2] is None else span[2] - through,
+        "lag_blocks": lag,
+        "behind": max_lag_blocks is not None
+        and (through is None or lag is None or lag > max_lag_blocks),
+        "reconcile": {str(k): v for k, v in reconcile.items()},
+        "recorded_diffs": diffs,
         "failed_windows": failed,
+    }
+
+
+def record_diffs(engine, job_id: str, start: int, end: int, diffs: list[dict]) -> int:
+    now = utcnow()
+    rows = [
+        {
+            "job_id": job_id,
+            "start_block": start,
+            "end_block": end,
+            "found_at_utc": now,
+            "kind": d["kind"],
+            "tx_hash": d.get("tx_hash"),
+            "log_index": d.get("log_index"),
+            "detail": d.get("detail", {}),
+        }
+        for d in diffs
+    ]
+    with engine.begin() as connection:
+        for offset in range(0, len(rows), CHUNK):
+            connection.execute(window_diffs.insert(), rows[offset : offset + CHUNK])
+    return len(rows)
+
+
+def _rewind(connection, job_id: str, first_block: int) -> None:
+    """Pull the watermark back so it no longer covers first_block."""
+    job = load_job(connection, job_id)
+    through = job["verified_through"]
+    if through is None or through < first_block:
+        return
+    value = None if first_block <= job["start_block"] else first_block - 1
+    connection.execute(
+        jobs.update().where(jobs.c.job_id == job_id).values(verified_through=value)
+    )
+
+
+def invalidate_window(engine, job_id: str, start: int, error_type: str) -> None:
+    """A done window turned out wrong: fail it and rewind the watermark."""
+    with engine.begin() as connection:
+        connection.execute(
+            windows.update()
+            .where(windows.c.job_id == job_id, windows.c.start_block == start)
+            .values(
+                status="failed", error_type=error_type[:64], updated_at_utc=utcnow()
+            )
+        )
+        _rewind(connection, job_id, start)
+
+
+def reset_windows(
+    engine,
+    job_id: str,
+    *,
+    below_version: int | None = None,
+    first: int | None = None,
+    last: int | None = None,
+) -> int:
+    """Send done windows back to pending (old parser version or a block range)."""
+    condition = [windows.c.job_id == job_id, windows.c.status == "done"]
+    if below_version is not None:
+        condition.append(windows.c.parser_version < below_version)
+    if first is not None:
+        condition.append(windows.c.end_block >= first)
+    if last is not None:
+        condition.append(windows.c.start_block <= last)
+    with engine.begin() as connection:
+        earliest = connection.scalar(
+            sa.select(sa.func.min(windows.c.start_block)).where(*condition)
+        )
+        if earliest is None:
+            return 0
+        count = connection.execute(
+            windows.update()
+            .where(*condition)
+            .values(status="pending", reconcile=None, updated_at_utc=utcnow())
+        ).rowcount
+        _rewind(connection, job_id, earliest)
+    return count
+
+
+def sample_done_windows(engine, job_id: str, count: int, seed=None) -> list[dict]:
+    with engine.connect() as connection:
+        rows = (
+            connection.execute(
+                sa.select(windows)
+                .where(windows.c.job_id == job_id, windows.c.status == "done")
+                .order_by(windows.c.start_block)
+            )
+            .mappings()
+            .all()
+        )
+    rows = [dict(r) for r in rows]
+    if count >= len(rows):
+        return rows
+    return sorted(
+        random.Random(seed).sample(rows, count), key=lambda r: r["start_block"]
+    )
+
+
+def verify_job(engine, job_id: str) -> dict:
+    """Recompute every done window from MySQL and compare with its stored totals."""
+    with engine.connect() as connection:
+        done = connection.execute(
+            sa.select(
+                windows.c.start_block,
+                windows.c.end_block,
+                windows.c.event_count,
+                windows.c.amount_sum,
+                windows.c.fingerprint,
+            )
+            .where(windows.c.job_id == job_id, windows.c.status == "done")
+            .order_by(windows.c.start_block)
+        ).all()
+    bad = []
+    events = 0
+    for start, end, count, amount, fingerprint in done:
+        tally = window_tally(engine, job_id, start)
+        events += tally.events
+        if not tally.matches(count, int(amount), fingerprint):
+            bad.append(
+                {
+                    "window": [start, end],
+                    "stored_events": count,
+                    "database_events": tally.events,
+                }
+            )
+    return {
+        "job_id": job_id,
+        "windows_checked": len(done),
+        "events": events,
+        "mismatched_windows": bad,
+        "ok": not bad,
     }

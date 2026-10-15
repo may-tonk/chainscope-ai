@@ -76,6 +76,12 @@ transfers = sa.Table(
         nullable=False,
     ),
     sa.Column("token_decimals", mysql.TINYINT(unsigned=True)),
+    # Digit count, so (amount_len, amount_raw) sorts amounts numerically.
+    sa.Column(
+        "amount_len",
+        mysql.TINYINT(unsigned=True),
+        sa.Computed("CHAR_LENGTH(amount_raw)", persisted=True),
+    ),
     sa.UniqueConstraint(
         "chain_id", "tx_hash", "log_index", name="uq_transfer_identity"
     ),
@@ -89,6 +95,9 @@ transfers = sa.Table(
     sa.Index("ix_transfer_token_block", "chain_id", "token_address", "block_number"),
     sa.Index("ix_transfer_from_block", "chain_id", "from_address", "block_number"),
     sa.Index("ix_transfer_to_block", "chain_id", "to_address", "block_number"),
+    sa.Index(
+        "ix_transfer_amount", "chain_id", "token_address", "amount_len", "amount_raw"
+    ),
     **options,
 )
 
@@ -151,6 +160,7 @@ windows = sa.Table(
     sa.Column("source_head", mysql.BIGINT(unsigned=True)),
     sa.Column("parser_version", mysql.SMALLINT(unsigned=True)),
     sa.Column("reconcile", sa.String(16)),
+    sa.Column("receipt_checked", mysql.INTEGER(unsigned=True)),
     sa.Column("error_type", sa.String(64)),
     sa.Column("updated_at_utc", mysql.DATETIME(fsp=6), nullable=False),
     sa.CheckConstraint(
@@ -177,5 +187,24 @@ window_events = sa.Table(
         ["coverage_windows.job_id", "coverage_windows.start_block"],
         name="fk_window_events_window",
     ),
+    **options,
+)
+
+window_diffs = sa.Table(
+    "window_diffs",
+    metadata,
+    sa.Column(
+        "diff_id", mysql.BIGINT(unsigned=True), primary_key=True, autoincrement=True
+    ),
+    sa.Column("job_id", job_id_type, nullable=False),
+    sa.Column("start_block", mysql.BIGINT(unsigned=True), nullable=False),
+    sa.Column("end_block", mysql.BIGINT(unsigned=True), nullable=False),
+    sa.Column("found_at_utc", mysql.DATETIME(fsp=6), nullable=False),
+    # missing_in_alchemy / missing_in_sqd / field_conflict / recheck_changed
+    sa.Column("kind", sa.String(32), nullable=False),
+    sa.Column("tx_hash", ascii66),
+    sa.Column("log_index", mysql.INTEGER(unsigned=True)),
+    sa.Column("detail", sa.JSON, nullable=False),
+    sa.Index("ix_diff_window", "job_id", "start_block"),
     **options,
 )
