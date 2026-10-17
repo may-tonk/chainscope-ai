@@ -34,7 +34,7 @@ import chainscope.holders as holders_module
 import chainscope.jobs as jobs_module
 import chainscope.sync as sync_module
 from chainscope.config import load_settings
-from chainscope.dex import load_pools, save_pools, set_pool_enabled
+from chainscope.dex import FACTORIES, load_pools, save_pools, set_pool_enabled
 from chainscope.errors import ChainScopeError
 from chainscope.holders import refresh_balances
 from chainscope.jobs import create_job, job_status, load_job, verify_job, window_tally
@@ -801,7 +801,7 @@ def test_p2_02_status_uses_the_live_head_and_cli_exit_codes(
         sys, "argv", ["cs", "status", "--job", "bem", "--max-lag-blocks", "5"]
     )
     current = {"chain": chain}
-    monkeypatch.setattr(cli, "Portal", lambda *a, **k: current["chain"].portal())
+    monkeypatch.setattr(cli, "portal_for", lambda *a, **k: current["chain"].portal())
 
     def status_code():
         code = cli.main()
@@ -1045,8 +1045,9 @@ def test_p2_06_block_line_over_the_byte_limit_splits_then_quarantines(monkeypatc
     monkeypatch.setattr(sqd_module, "MAX_LINE_BYTES", 2000)
     chain = RichChain(12, {12: [(A, B, i + 1) for i in range(20)]})
     portal = FixedPortal(json.dumps(chain.block(12)).encode() + b"\n")
-    with pytest.raises(sqd_module.TooManyEvents):
+    with pytest.raises(sqd_module.TooManyEvents) as raised:
         window_activity(portal, TOKEN, 10, 14, 1000)
+    assert raised.value.held is None and raised.value.block is None
     with pytest.raises(sqd_module.BlockTooLarge):
         window_activity(portal, TOKEN, 12, 12, 1000)
 
@@ -1368,3 +1369,188 @@ def test_p2_12_finality_needs_both_sources_or_says_sqd_only(mysql_engine):
     with Alchemy(chain, finalized=27).client() as rpc:
         both = run(engine, chain, rpc)
     assert both["finality"] == "min(sqd, rpc)" and both["source_head"] == 27
+
+
+@requires_mysql
+def test_sync_remembers_quarantine_across_runs_and_cli_exits_nonzero(
+    mysql_engine, monkeypatch, capsys
+):
+    engine = mysql_engine
+    new_job(engine)
+    chain = RichChain(24, {11: [(A, B, 5)]})
+    assert run(engine, chain)["coverage_complete"]
+    redo_job(engine, "bem", first=10, last=14)
+    chain.blocks[11] = [(A, B, 6)]
+    first = run(engine, chain)
+    assert first["stopped"] == "quarantined"
+    assert first["quarantined_remaining"] == 1
+
+    settings = replace(load_settings(), mysql_database=engine.url.database)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli, "run_sync", lambda *a, **k: run(engine, chain))
+    monkeypatch.setattr(sys, "argv", ["cs", "sync", "--job", "bem"])
+    # No new mismatch this run, but the durable quarantine still blocks success.
+    assert cli.main() == 3
+    retry = json.loads(capsys.readouterr().out)
+    assert retry["quarantined"] == []
+    assert retry["quarantined_remaining"] == 1
+    assert retry["stopped"] == "quarantined"
+    assert retry["verified_through"] is None
+    assert retry["target_block"] == 24 and not retry["coverage_complete"]
+    assert job_status(engine, "bem")["quarantined_windows"] == 1
+
+    # Explicitly release the window after restoring the investigated source.
+    chain.blocks[11] = [(A, B, 5)]
+    redo_job(engine, "bem", first=10, last=14)
+    assert cli.main() == 0
+    recovered = json.loads(capsys.readouterr().out)
+    assert recovered["stopped"] == "caught_up"
+    assert recovered["quarantined_remaining"] == 0
+    assert recovered["verified_through"] == 24 and recovered["coverage_complete"]
+
+
+@requires_mysql
+def test_sync_quarantine_count_is_not_limited_to_ten_examples(mysql_engine):
+    engine = mysql_engine
+    new_job(engine)
+    chain = Chain(74, {})
+    run(engine, chain)
+    with engine.begin() as connection:
+        connection.execute(
+            windows.update().values(status="failed", error_type="EventConflict")
+        )
+        connection.execute(jobs.update().values(verified_through=None))
+    result = run(engine, chain, max_seconds=0)
+    assert result["stopped"] == "max_runtime"
+    assert result["quarantined_remaining"] == 13
+    assert not result["coverage_complete"]
+    status = job_status(engine, "bem")
+    assert len(status["failed_windows"]) == 10
+    assert status["quarantined_windows"] == 13
+
+
+def test_measurement_tool_retries_529_for_time_lookup():
+    attempts, waits = [], []
+
+    def handler(request):
+        attempts.append(request.url.path)
+        if len(attempts) == 1:
+            return httpx.Response(529, headers={"Retry-After": "2"})
+        return httpx.Response(200, json={"block_number": 123})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+        client = measure_tools().Portal(
+            "https://portal.invalid",
+            "binance-mainnet",
+            http,
+            sleep=waits.append,
+            min_interval=0,
+        )
+        assert client.dataset_get("timestamps/1791907200/block") == {
+            "block_number": 123
+        }
+    assert attempts == [attempts[0]] * 2
+    assert waits == [2]
+
+
+# Follow-ups from the first real run -------------------------------------------
+
+
+@requires_mysql
+def test_split_log_says_what_triggered_it(mysql_engine, tmp_path):
+    engine = mysql_engine
+    new_job(engine)
+    chain = RichChain(14, {12: [(A, B, i + 1) for i in range(5)]})
+    path = tmp_path / "sync.jsonl"
+    run(engine, chain, event_limit=2, block_hard_limit=10, log_path=path)
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    first = next(line for line in lines if "split" in line)
+    assert first["split"] == [10, 14]
+    assert first["reason"] == "event_limit" and first["event_limit"] == 2
+    # Block 12 alone holds 5 Transfers: the count passes 2 while reading it.
+    assert first["held"] == 5 and first["at_block"] == 12
+
+
+class FailingFactoryChain(SwapChain):
+    """Factory scans from `fail_from` on are refused, like a Portal outage."""
+
+    def __init__(self, fail_from):
+        super().__init__()
+        self.fail_from = fail_from
+
+    def handler(self, request):
+        if request.url.path.endswith("/finalized-stream"):
+            body = json.loads(request.content)
+            factory = any(
+                FACTORIES["pancake_v2"][0] in f["address"] for f in body["logs"]
+            )
+            if factory and body["fromBlock"] >= self.fail_from:
+                return httpx.Response(400, json={"error": "refused"})
+        return super().handler(request)
+
+
+@requires_mysql
+def test_pools_discover_scans_in_chunks_and_resumes(mysql_engine):
+    engine = mysql_engine
+    new_job(engine)
+    messages = []
+    chain = FailingFactoryChain(fail_from=16)
+    with pytest.raises(ChainScopeError, match="--from-block 16"):
+        pools_discover(
+            engine, "bem", chain.portal(), chunk_blocks=3, notify=messages.append
+        )
+    # Chunks 10-12 and 13-15 finished: the pools created at block 10 are kept.
+    with engine.connect() as connection:
+        assert len(load_pools(connection, "bem", enabled_only=False)) == 2
+    assert len(messages) == 2
+
+    chain.fail_from = 10**9
+    rest = pools_discover(
+        engine, "bem", chain.portal(), from_block=16, chunk_blocks=3, notify=None
+    )
+    assert rest["scanned"] == [16, 24] and rest["added"] == []
+    # One scan of the whole range finds the same pools as the chunked one.
+    whole = pools_discover(engine, "bem", SwapChain().portal(), notify=None)
+    assert whole["scanned"] == [10, 24] and whole["added"] == []
+
+
+@requires_mysql
+def test_pools_discover_rejects_an_empty_range(mysql_engine):
+    new_job(mysql_engine)
+    with pytest.raises(ChainScopeError, match="扫描区间无效"):
+        pools_discover(
+            mysql_engine, "bem", SwapChain().portal(), from_block=30, notify=None
+        )
+
+
+def test_portal_sends_the_key_only_when_configured():
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("x-api-key"))
+        if request.url.path.endswith("/finalized-head"):
+            return httpx.Response(200, json={"number": 5})
+        return httpx.Response(200, content=b"")
+
+    for key in ("k-123", ""):
+        portal = Portal(
+            "https://portal.invalid",
+            "binance-mainnet",
+            httpx.Client(transport=httpx.MockTransport(handler)),
+            api_key=key,
+            sleep=lambda _: None,
+            min_interval=0,
+        )
+        portal.finalized_head()
+        list(portal.stream({"type": "evm"}, 1, 5))
+    assert seen == ["k-123", "k-123", None, None]
+
+
+def test_portal_address_and_key_come_from_settings(monkeypatch):
+    monkeypatch.setenv("SQD_API_KEY", "k-456")
+    monkeypatch.setenv("SQD_PORTAL_URL", "https://portal.example/")
+    settings = load_settings()
+    assert "k-456" not in repr(settings)
+    portal = sync_module.portal_for(settings, httpx.Client())
+    assert portal._base == "https://portal.example"
+    assert portal._headers == {"x-api-key": "k-456"}

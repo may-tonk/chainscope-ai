@@ -688,12 +688,28 @@ def job_status(
                 .group_by(windows.c.status)
             ).all()
         )
+        quarantined = connection.scalar(
+            sa.select(sa.func.count())
+            .select_from(windows)
+            .where(
+                windows.c.job_id == job_id,
+                windows.c.status == "failed",
+                windows.c.error_type.in_(QUARANTINE),
+            )
+        )
         span = connection.execute(
             sa.select(
                 sa.func.min(windows.c.start_block),
                 sa.func.max(windows.c.end_block),
                 sa.func.max(windows.c.source_head),
-                sa.func.coalesce(sa.func.sum(windows.c.event_count), 0),
+                sa.func.coalesce(
+                    sa.func.sum(
+                        sa.case(
+                            (windows.c.status == "done", windows.c.event_count), else_=0
+                        )
+                    ),
+                    0,
+                ),
             ).where(windows.c.job_id == job_id)
         ).one()
         last_done = connection.scalar(
@@ -749,7 +765,16 @@ def job_status(
         behind = "unknown"
     else:
         behind = lag > max_lag_blocks
+    from .ingestion import collection_progress
+
+    with engine.connect() as connection:
+        pending_progress = collection_progress(connection, job_id)
+        from .supplement import progress as supplement_progress
+
+        supplemental = supplement_progress(connection, job_id, target)
     return {
+        **pending_progress,
+        **supplemental,
         "job_id": job_id,
         "token_address": job["token_address"],
         "source": job["source"],
@@ -765,10 +790,12 @@ def job_status(
         "head_at_last_run": span[2],
         "last_window_done_at_utc": last_done,
         "events_in_done_windows": int(span[3]),
+        "events_saved_total": int(span[3]) + pending_progress["pending_events_saved"],
         "windows": {
             s: counts.get(s, 0) for s in ("done", "pending", "running", "failed")
         },
         "blocks_remaining_in_planned_windows": int(remaining),
+        "quarantined_windows": int(quarantined),
         # Measured against the live head; None when it could not be read.
         "lag_blocks": lag,
         "behind": behind,
@@ -822,6 +849,9 @@ def _rewind(connection, job_id: str, first_block: int) -> None:
             balances.clear(connection, job["token_address"])
             changes["balances_through"] = None
     connection.execute(jobs.update().where(jobs.c.job_id == job_id).values(**changes))
+    from .supplement import rewind
+
+    rewind(connection, job_id, first_block)
 
 
 def invalidate_window(engine, job_id: str, start: int, error_type: str) -> None:
@@ -912,6 +942,10 @@ def reset_stale_pool_windows(engine, job_id: str, pools: dict, connection=None) 
     if connection is None:
         with engine.begin() as connection:
             return reset_stale_pool_windows(engine, job_id, pools, connection)
+    from .supplement import independent, reset_pools
+
+    if independent(connection, job_id):
+        return reset_pools(connection, job_id, pools)
     rows = connection.execute(
         sa.select(windows.c.start_block, windows.c.end_block, windows.c.pool_set)
         .where(windows.c.job_id == job_id, windows.c.status == "done")
@@ -964,6 +998,10 @@ def verify_job(engine, job_id: str) -> dict:
     found by `recheck`, which fetches the windows again.
     """
     with engine.connect() as connection:
+        from .supplement import independent
+        from .supplement import verify as verify_swaps
+
+        separate_swaps = independent(connection, job_id)
         done = connection.execute(
             sa.select(
                 windows.c.start_block,
@@ -1019,7 +1057,11 @@ def verify_job(engine, job_id: str) -> dict:
         problems = []
         if not tally.matches(count, int(amount), fingerprint):
             problems.append("transfers")
-        if swap_count is not None and swap_counts.get(start, 0) != swap_count:
+        if (
+            not separate_swaps
+            and swap_count is not None
+            and swap_counts.get(start, 0) != swap_count
+        ):
             problems.append("swap_count")
         if problems:
             bad.append(
@@ -1032,6 +1074,7 @@ def verify_job(engine, job_id: str) -> dict:
                     "database_swaps": swap_counts.get(start, 0),
                 }
             )
+    swap_verification = verify_swaps(engine, job_id) if separate_swaps else {"ok": True}
     return {
         "job_id": job_id,
         "scope": "数据库内部一致性：Transfer 指纹、Swap 条数、同一区块的哈希和时间；"
@@ -1041,5 +1084,6 @@ def verify_job(engine, job_id: str) -> dict:
         "events": events,
         "mismatched_windows": bad,
         "blocks_with_conflicting_header": split_blocks,
-        "ok": not bad and not split_blocks,
+        **({"swap_verification": swap_verification} if separate_swaps else {}),
+        "ok": not bad and not split_blocks and swap_verification["ok"],
     }

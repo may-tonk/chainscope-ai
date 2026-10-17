@@ -65,6 +65,8 @@ JOB_ID = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 DECIMALS = "0x313ce567"  # decimals()
 DEFAULT_WINDOW = 50_000
 DEFAULT_EVENT_LIMIT = 50_000
+# About nine days of BSC blocks per Portal scan when looking for pools.
+DISCOVER_CHUNK_BLOCKS = 1_000_000
 SWAP_FIELDS = (
     "pool_address",
     "block_number",
@@ -91,6 +93,17 @@ FAILURES = (
 
 def say(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def portal_for(settings: Settings, http: httpx.Client, notify=None) -> Portal:
+    """The configured Portal: the public one unless .env names another or a key."""
+    return Portal(
+        settings.sqd_portal_url or DEFAULT_PORTAL,
+        DEFAULT_DATASET,
+        http,
+        api_key=settings.sqd_api_key,
+        notify=notify,
+    )
 
 
 def require_schema(engine) -> None:
@@ -173,7 +186,7 @@ def create(
             deployed = deploy_block(rpc, token, head)
             if (from_time or to_time) and portal is None:
                 http = stack.enter_context(httpx.Client(timeout=60))
-                portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+                portal = portal_for(settings, http, say)
             if from_time is not None:
                 moment = parse_time(from_time)
                 if moment > datetime.now(UTC):
@@ -456,11 +469,24 @@ def sync_job(
                     extra=extra,
                     swap_rows=swap_rows,
                 )
-            except TooManyEvents:
+            except TooManyEvents as exc:
                 fail_batch(engine, attempt, "TooManyEvents")
                 middle, second = split_window(engine, job_id, start, end)
                 summary["splits"] += 1
-                log({"split": [start, end], "into": [[start, middle], [second, end]]})
+                log(
+                    {
+                        "split": [start, end],
+                        "into": [[start, middle], [second, end]],
+                        # What triggered it: the item count passing event_limit
+                        # at `at_block`, or one block's line too long to read.
+                        "reason": "line_too_long"
+                        if exc.held is None
+                        else "event_limit",
+                        "held": exc.held,
+                        "event_limit": event_limit,
+                        "at_block": exc.block,
+                    }
+                )
                 continue
             except DataMismatch as exc:
                 # Evidence first, then quarantine; the run goes on elsewhere.
@@ -509,6 +535,20 @@ def sync_job(
         except ChainScopeError as exc:
             # Collected windows stay committed; only the balance cache waits.
             summary["balances"] = {"complete": False, "error": str(exc)}
+        # A quarantine survives process restarts; the list above describes only
+        # this run. Read durable progress before claiming that the job caught up.
+        progress = job_status(engine, job_id, head=head)
+        summary["verified_through"] = progress["verified_through"]
+        summary["target_block"] = (
+            head if job["end_block"] is None else min(head, job["end_block"])
+        )
+        summary["quarantined_remaining"] = progress["quarantined_windows"]
+        summary["coverage_complete"] = progress["lag_blocks"] == 0
+        if summary["stopped"] == "caught_up":
+            if summary["quarantined_remaining"]:
+                summary["stopped"] = "quarantined"
+            elif not summary["coverage_complete"]:
+                summary["stopped"] = "incomplete"
     elapsed = budget.elapsed()
     summary["elapsed_seconds"] = round(elapsed, 1)
     if max_seconds is not None:
@@ -637,7 +677,7 @@ def open_sources(settings: Settings, stack: ExitStack, *, reconcile: bool):
     http = stack.enter_context(
         httpx.Client(timeout=httpx.Timeout(120, connect=15), follow_redirects=False)
     )
-    portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http, notify=say)
+    portal = portal_for(settings, http, say)
     rpc = stack.enter_context(RpcClient(settings.require_rpc())) if reconcile else None
     return portal, rpc
 
@@ -648,6 +688,9 @@ def run_sync(
     *,
     reconcile: bool = True,
     trace_memory: bool = False,
+    primary: str = "alchemy",
+    phase: str = "all",
+    until_block: int | None = None,
     **limits,
 ) -> dict:
     engine = engine_for(settings)
@@ -655,11 +698,40 @@ def run_sync(
         tracemalloc.start()
     try:
         with ExitStack() as stack:
+            if primary not in ("alchemy", "sqd"):
+                raise ChainScopeError("未知转账主来源")
+            if not reconcile:
+                raise ChainScopeError(
+                    "正式入库必须保留本地完整性、回执和读回检查；仅暂存请使用 --phase collect"
+                )
             portal, rpc = open_sources(settings, stack, reconcile=reconcile)
             log_path = ROOT / "logs" / f"sync-{datetime.now(UTC):%Y%m%d}.jsonl"
-            summary = sync_job(
-                engine, job_id, portal, rpc=rpc, log_path=log_path, **limits
-            )
+            if primary == "alchemy":
+                from .hybrid import sync_hybrid
+
+                summary = sync_hybrid(
+                    engine,
+                    job_id,
+                    portal,
+                    rpc,
+                    phase=phase,
+                    until_block=until_block,
+                    log_path=log_path,
+                    **limits,
+                )
+            else:
+                if phase != "all" or until_block is not None:
+                    raise ChainScopeError("阶段和截止区块参数仅用于 Alchemy 主采")
+                from .supplement import independent
+
+                with engine.connect() as connection:
+                    if independent(connection, job_id):
+                        raise ChainScopeError(
+                            "该任务已拆分转账与买卖进度，请使用 Alchemy 主采入口"
+                        )
+                summary = sync_job(
+                    engine, job_id, portal, rpc=rpc, log_path=log_path, **limits
+                )
         if trace_memory:
             summary["memory_peak_mib"] = round(
                 tracemalloc.get_traced_memory()[1] / 2**20, 1
@@ -681,27 +753,74 @@ def run_recheck(settings: Settings, job_id: str, *, reconcile=True, **options):
         engine.dispose()
 
 
-def pools_discover(engine, job_id: str, portal: Portal) -> dict:
+def pools_discover(
+    engine,
+    job_id: str,
+    portal: Portal,
+    *,
+    from_block: int | None = None,
+    to_block: int | None = None,
+    chunk_blocks: int = DISCOVER_CHUNK_BLOCKS,
+    notify=say,
+) -> dict:
     """Find PancakeSwap pools of the job's token and schedule their backfill.
 
-    New pools and the windows they invalidate are saved in one transaction;
-    running discover again is safe, and sync redoes any window whose pool set
-    is out of date whatever happened in between.
+    The range (deployment to the finalized head by default) is scanned in
+    chunks. Each chunk's new pools and the windows they invalidate are saved
+    in one transaction, so an interrupted scan keeps what it found and can
+    continue with from_block; running discover again is safe, and sync redoes
+    any window whose pool set is out of date whatever happened in between.
     """
+    if chunk_blocks < 1:
+        raise ChainScopeError("--chunk-blocks 必须大于 0")
+    notify = notify or (lambda message: None)
     require_schema(engine)
     with job_lock(engine, job_id):
         with engine.connect() as connection:
             job = load_job(connection, job_id)
         head = portal.finalized_head()
-        result = discover_pools(engine, portal, job, head)
+        first = (
+            from_block
+            if from_block is not None
+            else (job.get("deploy_block") or job["start_block"])
+        )
+        last = head if to_block is None else min(to_block, head)
+        if first < 0 or first > last:
+            raise ChainScopeError(
+                f"扫描区间无效：{first}-{last}（最终确认高度 {head}）"
+            )
+        added, reset, scanned = [], 0, first - 1
+        chunks = (last - first) // chunk_blocks + 1
+        for number, low in enumerate(range(first, last + 1, chunk_blocks), 1):
+            high = min(low + chunk_blocks - 1, last)
+            try:
+                result = discover_pools(engine, portal, job, low, high)
+            except ChainScopeError as exc:
+                done = (
+                    "尚未完成任何一段"
+                    if scanned < first
+                    else f"已完整扫描 {first}-{scanned}"
+                )
+                raise ChainScopeError(
+                    f"{exc}；{done}，其中发现的池子已保存，"
+                    f"可用 --from-block {scanned + 1} 继续"
+                ) from exc
+            added += result["added"]
+            reset += result["windows_reset"]
+            scanned = high
+            notify(
+                f"pools discover: {low}-{high} 扫描完成（{number}/{chunks}），"
+                f"本段新发现 {len(result['added'])} 个池子"
+            )
     return {
         "job_id": job_id,
-        "scanned_through": head,
+        "scanned": [first, last],
+        "scanned_through": last,
         "added": [
             {k: v for k, v in p.items() if k not in ("job_id", "added_at_utc")}
-            for p in result["added"]
+            for p in added
         ],
-        "windows_reset": result["windows_reset"],
+        "windows_reset": reset,
         "note": "报价币不在 WBNB/USDT/BUSD/USDC 内的池子默认停用；确认后用 pools enable 启用",
     }
 

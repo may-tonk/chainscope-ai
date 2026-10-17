@@ -29,13 +29,14 @@ from .query import query_job
 from .query import report as storage_report
 from .records import inspect_csv
 from .rpc_client import RpcClient
-from .sqd import DEFAULT_DATASET, DEFAULT_PORTAL, Portal
 from .sync import (
     create,
     pools_discover,
+    portal_for,
     redo_job,
     run_recheck,
     run_sync,
+    say,
     status_with_head,
 )
 
@@ -105,6 +106,21 @@ def main() -> int:
         "sync", help="按窗口采集到最终确认高度；随时可中断，下次自动续采"
     )
     sync.add_argument("--job", default="bem")
+    sync.add_argument(
+        "--primary",
+        choices=("alchemy", "sqd"),
+        default="alchemy",
+        help="转账主来源，默认 Alchemy",
+    )
+    sync.add_argument(
+        "--phase",
+        choices=("all", "collect", "supplement"),
+        default="all",
+        help="all 分窗采集并正式入库，再补买卖；collect 仅暂存；supplement 提交已暂存完整窗口并补买卖",
+    )
+    sync.add_argument(
+        "--until-block", type=int, help="本次固定截止区块，不修改任务的长期结束位置"
+    )
     sync.add_argument("--max-windows", type=int, help="本次最多处理的窗口数")
     sync.add_argument(
         "--event-limit",
@@ -132,7 +148,7 @@ def main() -> int:
     sync.add_argument(
         "--no-reconcile",
         action="store_true",
-        help="不用 Alchemy 对账（窗口标为 skipped，不推荐）",
+        help="已禁用：待核验数据必须隔离；仅采集请用 --phase collect",
     )
     sync.add_argument(
         "--trace-memory", action="store_true", help="记录本次运行的 Python 内存峰值"
@@ -183,6 +199,18 @@ def main() -> int:
     pools.add_argument("--pool", help="池子地址（add/enable/disable 需要）")
     pools.add_argument(
         "--created-block", type=int, help="add：池子创建区块，默认任务起点"
+    )
+    pools.add_argument(
+        "--from-block", type=int, help="discover：从该区块开始扫描，默认部署区块"
+    )
+    pools.add_argument(
+        "--to-block", type=int, help="discover：扫描到该区块，默认最终确认高度"
+    )
+    pools.add_argument(
+        "--chunk-blocks",
+        type=int,
+        default=1_000_000,
+        help="discover：每段扫描的区块数，默认 100 万（约 9 天）",
     )
     holders = commands.add_parser(
         "holders", help="持仓排行（默认前 80），附标签和是否合约；可指定历史区块"
@@ -240,6 +268,9 @@ def main() -> int:
                 load_settings(),
                 args.job,
                 reconcile=not args.no_reconcile,
+                primary=args.primary,
+                phase=args.phase,
+                until_block=args.until_block,
                 trace_memory=args.trace_memory,
                 max_windows=args.max_windows,
                 max_seconds=None if args.max_minutes is None else args.max_minutes * 60,
@@ -248,7 +279,19 @@ def main() -> int:
                 event_limit=args.event_limit,
                 block_hard_limit=args.block_hard_limit,
             )
-            code = 3 if result.get("quarantined") else 0
+            code = (
+                3
+                if result.get("quarantined")
+                or result.get("quarantined_remaining")
+                or result.get("stopped") == "incomplete"
+                else 0
+            )
+            if (
+                not code
+                and args.primary == "alchemy"
+                and not result.get("coverage_complete")
+            ):
+                code = 2
         elif args.command == "recheck":
             result = run_recheck(
                 load_settings(),
@@ -265,7 +308,7 @@ def main() -> int:
             engine = engine_for(settings)
             try:
                 with httpx.Client(timeout=httpx.Timeout(30, connect=10)) as http:
-                    portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+                    portal = portal_for(settings, http)
                     result = status_with_head(
                         engine, args.job, portal, max_lag_blocks=args.max_lag_blocks
                     )
@@ -277,7 +320,7 @@ def main() -> int:
             engine = engine_for(settings)
             try:
                 with httpx.Client(timeout=httpx.Timeout(60, connect=15)) as http:
-                    portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
+                    portal = portal_for(settings, http)
                     result = query_job(engine, portal, args.job, args.start, args.end)
             finally:
                 engine.dispose()
@@ -376,8 +419,15 @@ def run_with_sources(args) -> tuple[dict, int]:
                     result = verify_holders(engine, rpc, args.job, top=args.top)
                 return result, 0 if result["ok"] else 3
             if args.action == "discover":
-                portal = Portal(DEFAULT_PORTAL, DEFAULT_DATASET, http)
-                return pools_discover(engine, args.job, portal), 0
+                portal = portal_for(settings, http, say)
+                return pools_discover(
+                    engine,
+                    args.job,
+                    portal,
+                    from_block=args.from_block,
+                    to_block=args.to_block,
+                    chunk_blocks=args.chunk_blocks,
+                ), 0
             if args.action == "list":
                 with engine.connect() as connection:
                     found = load_pools(connection, args.job, enabled_only=False)

@@ -182,6 +182,23 @@ def swap_summary(engine, job: dict, first: int, last: int) -> dict:
     The caller passes the counted (verified) range. Sums are exact Python
     integers over streamed rows; distinct traders are counted in SQL.
     """
+    from .supplement import progress as supplement_progress
+
+    with engine.connect() as connection:
+        separate = supplement_progress(connection, job["job_id"], last)
+    swap_coverage = None
+    if separate:
+        mark = separate["swaps_verified_through"]
+        counted_end = min(last, mark) if mark is not None else first - 1
+        swap_coverage = {
+            "state": "complete"
+            if counted_end >= last
+            else ("partial" if counted_end >= first else "none"),
+            "counted_blocks": [first, counted_end] if counted_end >= first else None,
+            "swaps_verified_through": mark,
+            "note": "买卖数据有独立覆盖进度；未补齐范围不能视为没有交易",
+        }
+        last = counted_end
     where = [swaps.c.job_id == job["job_id"], swaps.c.block_number.between(first, last)]
     groups = {}
     attribution = {}
@@ -217,6 +234,7 @@ def swap_summary(engine, job: dict, first: int, last: int) -> dict:
             sa.select(sa.func.count(sa.distinct(swaps.c.trader))).where(*where)
         )
     return {
+        **({"coverage": swap_coverage} if swap_coverage is not None else {}),
         "by_side": [
             {
                 "side": side,
@@ -239,8 +257,16 @@ def query_job(engine, portal, job_id: str, start_text: str, end_text: str) -> di
     first, last = block_range(portal, start, end)
     with engine.connect() as connection:
         job = load_job(connection, job_id)
+        from .supplement import progress as supplement_progress
+
+        admission = supplement_progress(connection, job_id, last)
     result = {
         "job_id": job_id,
+        **(
+            {"transfer_validation_policy": admission["transfer_validation_policy"]}
+            if admission
+            else {}
+        ),
         "range": {
             "from": start.isoformat(),
             "to_exclusive": end.isoformat(),

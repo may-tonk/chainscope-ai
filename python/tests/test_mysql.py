@@ -117,7 +117,7 @@ def test_default_collection_persists_without_any_json(
     with mysql_engine.connect() as connection:
         assert (
             connection.scalar(sa.text("SELECT version_num FROM alembic_version"))
-            == "0006"
+            == "0008"
         )
         assert connection.execute(
             sa.select(batches.c.raw_directory)

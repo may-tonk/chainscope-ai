@@ -210,6 +210,42 @@ def test_block_transfers_decodes_standard_logs():
     assert events[0]["block_time_utc"].tzinfo is None
 
 
+def test_time_lookup_retries_529_and_honors_retry_after():
+    clock = Clock()
+    requests = []
+
+    def handler(request):
+        requests.append(request.url.path)
+        if len(requests) == 1:
+            return httpx.Response(529, headers={"Retry-After": "3"})
+        return httpx.Response(200, json={"block_number": 123})
+
+    client = portal(handler, clock)
+    assert client.block_at(1_791_907_200) == 123
+    assert requests == [requests[0]] * 2
+    assert clock.sleeps == [3]
+    assert client.stats["server_errors"] == 1
+    assert client.stats["requests"] == 2
+
+
+def test_time_lookup_persistent_529_stops_after_finite_retries():
+    client = portal(lambda _: httpx.Response(529))
+    with pytest.raises(ChainScopeError, match="连续失败 7 次"):
+        client.block_at(1_791_907_200)
+    assert client.stats["requests"] == 7
+
+
+def test_stream_also_retries_529_without_skipping_blocks():
+    bodies = []
+    responses = [
+        httpx.Response(529),
+        httpx.Response(200, content=lines(block(10, log(0)))),
+    ]
+    client = portal(stream_handler(responses, bodies))
+    assert len(window_transfers(client, TOKEN, 10, 10, limit=10)) == 1
+    assert [body["fromBlock"] for body in bodies] == [10, 10]
+
+
 @pytest.mark.parametrize(
     ("bad", "message"),
     [

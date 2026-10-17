@@ -21,7 +21,9 @@ DEFAULT_DATASET = "binance-mainnet"
 # window records the version that actually parsed it, and `redo` without a
 # range resets only windows below the current version.
 PARSER_VERSION = 1
-RETRY_STATUS = (429, 500, 502, 503, 504)
+# The public Portal also intermittently returns 529 for time lookups.
+# Treat it as a transient server error, under the same finite retry limit.
+RETRY_STATUS = (429, 500, 502, 503, 504, 529)
 # One line of the stream is one block. 32 MiB holds about 70,000 Transfer logs,
 # more than BLOCK_HARD_LIMIT, so the item limit is what normally stops a block.
 MAX_LINE_BYTES = 32 * 1024 * 1024
@@ -42,7 +44,16 @@ LOG_FIELDS = {
 
 
 class TooManyEvents(Exception):
-    """A window holds more events than its limit; the caller splits it."""
+    """A window holds more events than its limit; the caller splits it.
+
+    `held` is the count when the limit was passed and `block` the block being
+    read; both are None when one block's line was too long to read.
+    """
+
+    def __init__(self, held: int | None = None, block: int | None = None):
+        super().__init__(held, block)
+        self.held = held
+        self.block = block
 
 
 class LineTooLong(ChainScopeError):
@@ -58,6 +69,7 @@ class Portal:
         dataset: str,
         client: httpx.Client,
         *,
+        api_key: str = "",
         notify: Callable[[str], None] | None = None,
         sleep=time.sleep,
         clock=time.monotonic,
@@ -66,6 +78,8 @@ class Portal:
         self._base = base.rstrip("/")
         self.dataset = dataset
         self._client = client
+        # Testing and paid Portal plans take a key; the public Portal needs none.
+        self._headers = {"x-api-key": api_key} if api_key else {}
         self._notify = notify or (lambda message: None)
         self._sleep = sleep
         self._clock = clock
@@ -104,7 +118,7 @@ class Portal:
         while True:
             self._pace()
             try:
-                with self._client.stream("GET", url) as response:
+                with self._client.stream("GET", url, headers=self._headers) as response:
                     status = response.status_code
                     retry_after = response.headers.get("Retry-After")
                     content = (
@@ -163,7 +177,9 @@ class Portal:
             status = None
             retry_after = None
             try:
-                with self._client.stream("POST", url, json=body) as response:
+                with self._client.stream(
+                    "POST", url, json=body, headers=self._headers
+                ) as response:
                     status = response.status_code
                     retry_after = response.headers.get("Retry-After")
                     if status == 200:
@@ -335,7 +351,7 @@ def window_activity(
                 swap_legs.extend(block_swaps(block, pools))
             held = len(events) + len(swap_legs)
             if held > limit and end > start:
-                raise TooManyEvents(held)
+                raise TooManyEvents(held, block["header"]["number"])
             if held > hard_limit:
                 raise BlockTooLarge(
                     f"区块 {start} 有 {held} 条转账和交易，超过单区块硬上限 {hard_limit}；"

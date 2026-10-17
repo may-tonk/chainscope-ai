@@ -46,7 +46,7 @@ SELECTORS = {
     "decimals": "0x313ce567",
     "totalSupply": "0x18160ddd",
 }
-RETRY_STATUS = (429, 500, 502, 503, 504)
+RETRY_STATUS = (429, 500, 502, 503, 504, 529)
 BLOCK_FIELDS = {"number": True, "hash": True, "timestamp": True}
 LOG_FIELDS = {
     "logIndex": True,

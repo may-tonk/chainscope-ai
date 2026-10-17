@@ -202,6 +202,123 @@ window_events = sa.Table(
     **options,
 )
 
+# Alchemy pages are durable before SQD is available. These tables have no links
+# to window_events: only store_window may admit them to verified statistics.
+ingestion = sa.Table(
+    "transfer_ingestion",
+    metadata,
+    sa.Column("job_id", job_id_type, primary_key=True),
+    sa.Column("start_block", mysql.BIGINT(unsigned=True), primary_key=True),
+    sa.Column("end_block", mysql.BIGINT(unsigned=True), nullable=False),
+    sa.Column("generation", batch_id_type, nullable=False),
+    sa.Column("provider", sa.String(16), nullable=False),
+    sa.Column("page_key", sa.Text),
+    sa.Column("seen_keys", sa.JSON, nullable=False),
+    sa.Column("pages", mysql.INTEGER(unsigned=True), nullable=False),
+    sa.Column("event_count", mysql.INTEGER(unsigned=True), nullable=False),
+    sa.Column("complete", sa.Boolean, nullable=False),
+    sa.Column("updated_at_utc", mysql.DATETIME(fsp=6), nullable=False),
+    sa.ForeignKeyConstraint(
+        ["job_id", "start_block"],
+        ["coverage_windows.job_id", "coverage_windows.start_block"],
+        name="fk_ingestion_window",
+    ),
+    **options,
+)
+
+pending_transfers = sa.Table(
+    "pending_transfers",
+    metadata,
+    sa.Column("job_id", job_id_type, primary_key=True),
+    sa.Column("start_block", mysql.BIGINT(unsigned=True), primary_key=True),
+    sa.Column("tx_hash", ascii66, primary_key=True),
+    sa.Column("log_index", mysql.INTEGER(unsigned=True), primary_key=True),
+    sa.Column("generation", batch_id_type, nullable=False),
+    sa.Column("block_number", mysql.BIGINT(unsigned=True), nullable=False),
+    sa.Column("from_address", ascii42, nullable=False),
+    sa.Column("to_address", ascii42, nullable=False),
+    sa.Column(
+        "amount_raw",
+        mysql.VARCHAR(78, charset="ascii", collation="ascii_bin"),
+        nullable=False,
+    ),
+    sa.Column("block_time_utc", mysql.DATETIME(fsp=6)),
+    sa.ForeignKeyConstraint(
+        ["job_id", "start_block"],
+        ["coverage_windows.job_id", "coverage_windows.start_block"],
+        name="fk_pending_window",
+    ),
+    sa.CheckConstraint(
+        "amount_raw REGEXP '^(0|[1-9][0-9]{0,77})$'", name="ck_pending_amount_digits"
+    ),
+    sa.CheckConstraint(
+        "CHAR_LENGTH(amount_raw) < 78 OR amount_raw <= '115792089237316195423570985008687907853269984665640564039457584007913129639935'",
+        name="ck_pending_amount_uint256",
+    ),
+    sa.Index("ix_pending_generation", "job_id", "start_block", "generation"),
+    **options,
+)
+
+pool_scans = sa.Table(
+    "pool_discovery_progress",
+    metadata,
+    sa.Column(
+        "job_id", job_id_type, sa.ForeignKey("scan_jobs.job_id"), primary_key=True
+    ),
+    sa.Column(
+        "configuration",
+        mysql.CHAR(64, charset="ascii", collation="ascii_bin"),
+        nullable=False,
+    ),
+    sa.Column("scanned_through", mysql.BIGINT(unsigned=True), nullable=False),
+    sa.Column("updated_at_utc", mysql.DATETIME(fsp=6), nullable=False),
+    **options,
+)
+
+# Transfer admission and Swap supplementation have independent coverage.
+supplement_jobs = sa.Table(
+    "supplement_jobs",
+    metadata,
+    sa.Column(
+        "job_id", job_id_type, sa.ForeignKey("scan_jobs.job_id"), primary_key=True
+    ),
+    sa.Column("verified_through", mysql.BIGINT(unsigned=True)),
+    sa.Column("updated_at_utc", mysql.DATETIME(fsp=6), nullable=False),
+    **options,
+)
+
+swap_windows = sa.Table(
+    "swap_windows",
+    metadata,
+    sa.Column(
+        "job_id", job_id_type, sa.ForeignKey("supplement_jobs.job_id"), primary_key=True
+    ),
+    sa.Column("start_block", mysql.BIGINT(unsigned=True), primary_key=True),
+    sa.Column("end_block", mysql.BIGINT(unsigned=True), nullable=False),
+    sa.Column("status", sa.String(16), nullable=False),
+    sa.Column("pool_set", mysql.CHAR(16, charset="ascii", collation="ascii_bin")),
+    sa.Column("event_count", mysql.INTEGER(unsigned=True)),
+    sa.Column("fingerprint", mysql.BINARY(32)),
+    sa.Column("error_type", sa.String(64)),
+    sa.Column("updated_at_utc", mysql.DATETIME(fsp=6), nullable=False),
+    sa.CheckConstraint(
+        "status IN ('pending', 'done', 'failed')", name="ck_swap_window_status"
+    ),
+    sa.CheckConstraint("end_block >= start_block", name="ck_swap_window_range"),
+    sa.Index("ix_swap_window_status", "job_id", "status", "start_block"),
+    **options,
+)
+
+block_headers = sa.Table(
+    "block_headers",
+    metadata,
+    sa.Column("chain_id", mysql.INTEGER(unsigned=True), primary_key=True),
+    sa.Column("block_number", mysql.BIGINT(unsigned=True), primary_key=True),
+    sa.Column("block_hash", ascii66, nullable=False),
+    sa.Column("block_time_utc", mysql.DATETIME(fsp=6), nullable=False),
+    **options,
+)
+
 window_diffs = sa.Table(
     "window_diffs",
     metadata,
