@@ -274,13 +274,11 @@ def save_pools(
     return {"added": added, "windows_reset": reset}
 
 
-def discover_pools(engine, portal, job: dict, head: int) -> dict:
-    """PancakeSwap V2/V3 pools of the token created from the job start to head."""
+def discover_pools(engine, portal, job: dict, first: int, last: int) -> dict:
+    """PancakeSwap V2/V3 pools of the token created in blocks [first, last]."""
     token = job["token_address"]
     found = []
-    # From deployment, so a pool created before a later job start is still found.
-    first = job.get("deploy_block") or job["start_block"]
-    for block in portal.stream(discovery_query(token), first, head):
+    for block in portal.stream(discovery_query(token), first, last):
         found.extend(created_pools(block, token))
     return save_pools(engine, job["job_id"], found, "factory")
 
@@ -348,6 +346,10 @@ def set_pool_enabled(engine, job_id: str, pool: str, enabled: bool) -> dict:
 
 def _forget_pool(connection, job_id, before: dict, after: dict, created: int) -> None:
     """After a disable, mark consistent windows as collected with the new set."""
+    from .supplement import independent
+
+    if independent(connection, job_id):
+        return  # only independent Swap coverage is reset below
     rows = connection.execute(
         sa.select(windows.c.start_block, windows.c.end_block, windows.c.pool_set).where(
             windows.c.job_id == job_id,

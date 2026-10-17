@@ -13,7 +13,7 @@ from .config import ROOT, Settings
 from .errors import ChainScopeError
 from .models import batch_events, batches, metadata, transfers
 
-SCHEMA_REVISION = "0006"
+SCHEMA_REVISION = "0008"
 SCHEMA_TABLES = (
     "collection_batches",
     "transfer_events",
@@ -21,6 +21,12 @@ SCHEMA_TABLES = (
     "scan_jobs",
     "coverage_windows",
     "window_events",
+    "transfer_ingestion",
+    "pending_transfers",
+    "pool_discovery_progress",
+    "supplement_jobs",
+    "swap_windows",
+    "block_headers",
     "window_diffs",
     "dex_pools",
     "swap_events",

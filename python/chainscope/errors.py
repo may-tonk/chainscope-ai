@@ -5,6 +5,10 @@ class ChainScopeError(Exception):
     """A failure that can safely be shown in the CLI."""
 
 
+class SourceUnavailable(ChainScopeError):
+    """An exhausted retry/quota/availability condition; not a data mismatch."""
+
+
 class DataMismatch(ChainScopeError):
     """Collected data disagrees with stored data or a second source.
 

@@ -28,9 +28,37 @@ cs pools enable --job bem --pool 0x...   # 人工确认后启用；会从池子�
 cs labels-import                # 导入 config/address_labels.toml
 ```
 
-最好在第一次 `sync` 之前执行 `pools discover`，这样回填只做一遍。之后启用新池子会重做它创建以来的窗口（Transfer 不会重复写入，但会再次与 Alchemy 对账，消耗请求）。
+最好在第一次 `sync` 之前执行 `pools discover`，这样回填只做一遍。拆分进度后，启用新池子只重做相关 Swap 窗口，保留正式 Transfer 和它的连续进度。旧 SQD 主采任务仍沿用原来的合并窗口规则。
+
+`pools discover` 默认从部署区块扫到最终确认高度，按段进行（`--chunk-blocks`，默认 100 万个区块，约 9 天）。每段完成就保存找到的池子，并在终端打印进度。中途失败时，报错会给出 `--from-block`，从那里继续即可。也可以先用 `--to-block` 只扫部署后的前几段。
 
 ## 2. 日常运行
+
+2026-10-16 起，`sync` 默认采用 **Alchemy 每窗完成后正式提交转账，SQD 独立补充池子与 Swap**（不再全量重读、比对转账）。本次命令开始时固定最终确认截止区块，完成后停止；不自动追随后来新增的区块，也不自动注册定时任务。
+
+```powershell
+cs sync --job bem                              # 边采边提交正式转账，再独立补充买卖
+cs sync --job bem --phase collect              # 只保存待核验转账，不进入正式统计
+cs sync --job bem --phase supplement           # 提交已有完整暂存窗口，再继续补买卖
+cs sync --job bem --until-block 127813580       # 继续本轮原先固定的截止范围
+```
+
+一次手动启动并在采齐后自动做库内核验、持仓链上核对和基础分析，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe -B python/tools/run_bem_history.py --trace-memory
+```
+
+该入口仅运行本次固定截止范围，不注册定时任务。运行报告写在 `reports/bem-hybrid-full-*.json`；同名 `.stop` 文件用于安全停止，程序在页、窗口或发现分段的事务边界退出。发现数据冲突会停止等待人工处理。报告只有在覆盖完整、库内核验及持仓核对通过时才写 `status: completed`；测试通过或主采结束都不能替代全量完成证据。
+
+- 迁移 0008 在 0007 基础上只新增 `block_headers`、`supplement_jobs`、`swap_windows`，保留全部旧表的数据、页游标和连续进度。
+- Alchemy 每页最多 1000 条；页面与 pageKey 在同一事务提交。游标超过 8 分钟时，仅重读该窗口；旧代数据保留为证据，当前代单独计数。窗口过密则拆分，不从头重采整个历史。
+- `pending_transfers` 不链接正式 `window_events`，不参与 `query`、持仓缓存和正式排行。默认完整 Alchemy 窗口通过本地字段/分页、原有回执抽查、事务读回检查即可推进 `verified_through`，标记 `local_checked`；没有声称全量双源核验。SQD 只补轻量区块元信息，不请求转账明细字段；缺失元信息可由主 RPC 补齐并缓存。
+- `status` 的 `collected_through` 是连续已采集位置，`verified_through`（别名 `transfers_committed_through`）是本地检查通过的连续正式转账位置；`pending_events_saved` 包含完整/尚在分页的当前代待核验事件。`awaiting_verification_events` 只统计已采完窗口中等待核验的事件。两种进度不能混用。
+- SQD 按 5 万区块发现已配置 PancakeSwap V2/V3 工厂的池子，先提交池子及相关 Swap 进度回退，再保存发现进度。中断后重复尚未记账的一段是安全的；不会跳过未提交范围。每段完成后补充已覆盖的 Swap 窗口，使用本地正式 Transfer 判断交易归属；不会重新下载整份 Transfer，也不会回退转账进度。
+- Alchemy 的额度/重试耗尽型故障会切换到 SQD，仅保存待核验数据。SQD 来源数据必须等 Alchemy 恢复后才能独立核验；SQD 不能验证自己。错误参数、数据冲突不会伪装成额度耗尽。
+- SQD 补充失败不撤销已提交的 Alchemy 转账。`swaps_verified_through` 单独记录买卖覆盖，查询明确标注 none/partial/complete。退出码 2 表示至少一类覆盖尚未完整，不能当作全流程采齐。隔离返回 3，其他失败返回 1。不自动付费或升级。
+- 老的 `--primary sqd` 只用于尚未拆分进度的旧任务；已拆分任务拒绝切回旧窗口路径。`--no-reconcile` 不用于绕过本地入库检查。
 
 ```powershell
 cs sync --job bem --max-minutes 30 --trace-memory   # 回填；可以随时 Ctrl+C，下次自动续采
@@ -38,11 +66,15 @@ cs status --job bem --max-lag-blocks 2000          # 先读当前最终确认高
 cs query --job bem --from 2026-10-01 --to 2026-10-08
 ```
 
-- `sync` 默认每个窗口都用 Alchemy 对账（条数、金额合计、指纹），并随机抽 3 笔 Transfer 和 3 笔 Swap 核对回执。数据不一致的窗口被隔离：差异写入 `window_diffs`，窗口标为失败且不自动重试，水位不会越过它，其余窗口继续；命令最后以退出码 3 结束。网络或数据库的暂时失败会让命令以 1 退出，下次运行自动重试。
-- 预算参数：`--max-minutes`、`--max-requests`、`--max-cu`、`--max-windows` 都是软上限，在窗口之间和持仓分块之间检查；已开始的窗口会做完，所以可能超出一个窗口的时间，超出量写在 `budget_overrun_seconds`。硬上限是定时任务的执行时间限制（`--max-minutes` 加 5 分钟），被强行结束的窗口下次自动恢复。
+- `sync` 默认保留本地数量、金额合计、指纹读回，并抽查每窗最多 3 笔 Transfer 和 3 笔 Swap 回执；不做全量 SQD/Alchemy 转账比较。数据不一致的窗口被隔离：差异写入 `window_diffs`，窗口标为失败且不自动重试，水位不会越过它，相应的转账/买卖连续进度独立；命令最后以退出码 3 结束。网络或数据库的暂时失败会让命令以 1 退出，下次运行自动重试。
+- 预算参数：`--max-minutes`、`--max-requests`、`--max-cu`、`--max-windows` 都是软上限。Alchemy 主采在页面之间检查，已提交页可单独恢复；SQD 补充/核验和持仓计算在分段或窗口之间检查，已开始的事务或请求可能超出预算。旧 SQD 主采路径按窗口检查，并报告 `budget_overrun_seconds`。本次手动全采没有注册定时任务或硬超时。
 - 请求数按每次 HTTP 尝试计（含重试）；Alchemy 计算单元只按成功返回的调用估算。
 - `status` 的 `lag_blocks` 用刚读取的最终确认高度计算，并给出读取时间 `head_observed_at_utc`；读不到时 `behind` 为 `unknown`，不会用旧高度代替。
 - 每个窗口的进度记录在 `logs/sync-YYYYMMDD.jsonl`。
+- `sync` 的 `quarantined` 只列本次新发现的问题，`quarantined_remaining` 是数据库中尚未处理的隔离窗口总数。旧隔离窗口在重启后仍使退出码为 3；没有可运行窗口但仍有隔离窗口时，`stopped` 为 `quarantined`，不会显示 `caught_up`。`coverage_complete` 表示连续水位是否覆盖本次的 `target_block`；预算用尽返回成功退出码只表示本轮正常停止，不代表整个任务完成。
+- Portal 时间换算或日志流遇到 HTTP 529 时有限重试，读取 `Retry-After`；持续失败会明确报错，不把失败当成空数据，也不估算区块号。
+- 窗口拆分时，日志里的 `reason` 说明原因：`event_limit` 表示读到 `at_block` 时累计 `held` 条，超过了 `event_limit`；`line_too_long` 表示单个区块的响应超过 32 MiB。
+- 公共 Portal 不需要密钥。SQD 官方价格页注明 Portal billing 尚未上线，公布的套餐流量和带宽不能当作已实测生效的账号额度，也不能据此把 HTTP 529 判断为额度耗尽。已有密钥写进 `.env` 的 `SQD_API_KEY`；需要换 Portal 地址时设置 `SQD_PORTAL_URL`。
 
 持仓与行情：
 

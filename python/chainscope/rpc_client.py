@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from .archive import JsonArchive
-from .errors import ChainScopeError
+from .errors import ChainScopeError, SourceUnavailable
 
 RETRY_STATUS = (429, 500, 502, 503, 504)
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -83,7 +83,7 @@ class RpcClient:
                 status, headers, content = self._post(payload)
             except (httpx.TimeoutException, httpx.NetworkError):
                 if attempt == 2:
-                    raise ChainScopeError(
+                    raise SourceUnavailable(
                         f"{method}: 网络连接或超时失败，已尝试 3 次"
                     ) from None
                 self._sleep(2**attempt)
@@ -94,6 +94,8 @@ class RpcClient:
                 self._sleep(retry_wait(headers, attempt))
                 continue
             if status != 200:
+                if status in RETRY_STATUS:
+                    raise SourceUnavailable(f"{method}: HTTP {status}，已完成有限重试")
                 raise ChainScopeError(f"{method}: HTTP {status}")
             # Answered requests are what the provider bills; count them here.
             self.calls[method] += 1
@@ -112,6 +114,12 @@ class RpcClient:
                 code = error.get("code") if isinstance(error, dict) else None
                 # Provider messages can echo credentials. Only expose numeric codes.
                 code = code if isinstance(code, int) else "unknown"
+                message = str(error.get("message", "")).lower() if isinstance(error, dict) else ""
+                if code in (429, -32005) or any(term in message for term in (
+                    "monthly limit", "monthly capacity", "quota exceeded", "rate limit",
+                    "compute units exceeded", "compute units limit",
+                )):
+                    raise SourceUnavailable(f"{method}: 服务额度或速率暂不可用（代码 {code}）")
                 raise ChainScopeError(f"{method}: JSON-RPC 错误 {code}")
             if "result" not in body:
                 raise ChainScopeError(f"{method}: 缺少 result 字段")
