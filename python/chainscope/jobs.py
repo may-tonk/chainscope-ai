@@ -20,7 +20,7 @@ from sqlalchemy.exc import OperationalError
 
 from . import balances
 from .database import utcnow
-from .errors import ChainScopeError, EventConflict, ReadbackMismatch
+from .errors import ChainScopeError, EventConflict, ReadbackMismatch, ReconcileMismatch
 from .models import (
     batches,
     jobs,
@@ -471,6 +471,16 @@ def _store(
                 f"窗口 {start}-{end} 有 {len(conflicts)} 条事件与数据库已存内容不同"
                 "（区块、时间、地址或金额）；不会覆盖，已隔离该窗口",
                 conflicts,
+            )
+        from .transaction_checks import transaction_conflicts
+
+        transaction_diffs = transaction_conflicts(
+            connection, job["chain_id"], events, job["job_id"]
+        )
+        if transaction_diffs:
+            raise ReconcileMismatch(
+                "同一交易对应多个区块，事务内最终检查阻止写入",
+                transaction_diffs[:1000],
             )
         fresh = [e for e in events if (e["tx_hash"], e["log_index"]) not in existing]
         for offset in range(0, len(fresh), CHUNK):
