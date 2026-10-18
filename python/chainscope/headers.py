@@ -6,7 +6,7 @@ import httpx
 import sqlalchemy as sa
 from sqlalchemy.dialects.mysql import insert as upsert
 
-from .errors import ChainScopeError, EventConflict
+from .errors import ChainScopeError, EventConflict, ReconcileMismatch
 from .models import block_headers, transfers
 from .parser import HASH, fixed_hex, quantity
 from .sqd import BLOCK_FIELDS
@@ -54,6 +54,52 @@ def save_headers(engine, rows):
             .values(rows)
             .on_duplicate_key_update(block_number=block_headers.c.block_number)
         )
+
+
+def confirm_transfer_times(staged, headers, rpc, stop):
+    """Confirm discrepant metadata against RPC, without rewriting the source rows."""
+    confirmed = {}
+    evidence = []
+    for item in staged:
+        number = item["block_number"]
+        header = headers[number]
+        original = item["block_time_utc"]
+        if original is None or original == header["block_time_utc"]:
+            continue
+        if stop():
+            return None
+        if number not in confirmed:
+            raw = rpc.call("eth_getBlockByNumber", [hex(number), False])
+            if (
+                not isinstance(raw, dict)
+                or quantity(raw.get("number"), "block.number") != number
+            ):
+                raise ChainScopeError("时间复核所需的主节点区块头缺失或高度不符")
+            canonical = header_row(
+                number,
+                raw.get("hash"),
+                quantity(raw.get("timestamp"), "timestamp"),
+            )
+            if any(canonical[k] != header[k] for k in ("block_hash", "block_time_utc")):
+                raise ReconcileMismatch(
+                    "时间复核时主节点与缓存区块头不一致，保留隔离",
+                    [{"kind": "header_conflict", "detail": {"block_number": number}}],
+                )
+            confirmed[number] = canonical
+        evidence.append(
+            {
+                "tx_hash": item["tx_hash"],
+                "log_index": item["log_index"],
+                "detail": {
+                    "block_number": number,
+                    "block_hash": header["block_hash"],
+                    "source_time_utc": original.isoformat(),
+                    "confirmed_time_utc": header["block_time_utc"].isoformat(),
+                    "confirmation_source": "alchemy_eth_getBlockByNumber",
+                },
+            }
+        )
+    return evidence
 
 
 def complete_headers(engine, job, window, staged, portal, rpc, stop):
