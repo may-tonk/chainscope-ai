@@ -188,6 +188,22 @@ def main() -> int:
         "verify-job", help="从 MySQL 重新计算每个完成窗口，核对数量、金额和指纹"
     )
     verify_job_cmd.add_argument("--job", default="bem")
+    accept = commands.add_parser(
+        "accept-sample", help="只读轻量验收：窗口衔接、最多8个区块日志、部分持仓"
+    )
+    accept.add_argument("--job", default="bem")
+    accept.add_argument("--cutoff-block", type=int, required=True)
+    accept.add_argument("--top", type=int, default=5, help="抽查前N个持仓，0–20")
+    accept.add_argument("--random", dest="random_count", type=int, default=5,
+                        help="额外随机持仓数，0–20")
+    accept.add_argument("--seed", type=int, default=0, help="随机持仓抽样种子")
+    tx_scan = commands.add_parser(
+        "scan-tx-blocks", help="只读筛查同一交易跨区块，只有命中交易查询回执"
+    )
+    tx_scan.add_argument("--job", default="bem")
+    tx_scan.add_argument("--cutoff-block", type=int, required=True)
+    tx_scan.add_argument("--max-receipts", type=int, default=50,
+                         help="最多核对多少笔可疑交易，0–100；0表示只做本地筛查")
     pools = commands.add_parser(
         "pools",
         help="交易池：discover 自动发现 / list / add 手工添加 / enable / disable",
@@ -350,6 +366,24 @@ def main() -> int:
                     result = storage_report(engine, args.job)
                 elif args.command == "verify-job":
                     result = verify_job(engine, args.job)
+                    code = 0 if result["ok"] else 3
+                elif args.command == "accept-sample":
+                    from .acceptance import accept_sample
+
+                    with RpcClient(settings.require_rpc()) as rpc:
+                        result = accept_sample(
+                            engine, rpc, args.job, args.cutoff_block,
+                            top=args.top, random_count=args.random_count, seed=args.seed,
+                        )
+                    code = 0 if result["ok"] else 3
+                elif args.command == "scan-tx-blocks":
+                    from .transaction_checks import scan_transaction_blocks
+
+                    with RpcClient(settings.require_rpc()) as rpc:
+                        result = scan_transaction_blocks(
+                            engine, rpc, args.job, args.cutoff_block,
+                            max_receipts=args.max_receipts, notify=say,
+                        )
                     code = 0 if result["ok"] else 3
                 elif args.command == "holders":
                     result = top_holders(

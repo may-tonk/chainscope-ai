@@ -189,6 +189,9 @@ def promote(
     staged = pending_rows(engine, job["job_id"], window)
     with engine.connect() as c:
         saved = checkpoint(c, job["job_id"], window["start_block"])
+        from .transaction_checks import reject_conflicting_transactions
+
+        reject_conflicting_transactions(c, job["chain_id"], staged, rpc, stop, job["job_id"])
     token, start, end = job["token_address"], window["start_block"], window["end_block"]
     policy = "local_checked"
     if saved["provider"] == "sqd":
