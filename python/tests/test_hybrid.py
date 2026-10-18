@@ -1,7 +1,7 @@
 """Acceptance of pending isolation, page recovery and dual-source promotion."""
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -14,7 +14,12 @@ import chainscope.hybrid as hybrid
 import chainscope.ingestion as ingest
 import chainscope.jobs as job_module
 from chainscope.database import utcnow
-from chainscope.errors import ChainScopeError, EventConflict, SourceUnavailable
+from chainscope.errors import (
+    ChainScopeError,
+    EventConflict,
+    ReconcileMismatch,
+    SourceUnavailable,
+)
 from chainscope.holders import top_holders
 from chainscope.hybrid import sync_hybrid
 from chainscope.jobs import job_status, load_job, plan_windows, verify_job
@@ -22,6 +27,7 @@ from chainscope.models import (
     ingestion,
     pending_transfers,
     transfers,
+    window_diffs,
     window_events,
     windows,
 )
@@ -569,3 +575,163 @@ def test_bad_staged_count_blocks_formal_admission(mysql_engine):
     with pytest.raises(ChainScopeError, match="数量"):
         run(e, chain)
     assert count(e, transfers) == 0
+
+
+class Timestamped(Paged):
+    """Transfer metadata differs while the block header stays authoritative."""
+
+    def __init__(self, chain, *, bad_header=None, bad_receipt=False):
+        super().__init__(chain)
+        self.bad_header = bad_header
+        self.bad_receipt = bad_receipt
+        self.header_calls = 0
+
+    def transfers(self, start, end):
+        rows = super().transfers(start, end)
+        for row in rows:
+            number = int(row["blockNum"], 16)
+            stamp = chain_block(number, 0)["header"]["timestamp"] - 2
+            row["metadata"] = {
+                "blockTimestamp": datetime.fromtimestamp(stamp, UTC).isoformat()
+            }
+        return rows
+
+    def receipt(self, tx_hash):
+        receipt = super().receipt(tx_hash)
+        if self.bad_receipt:
+            receipt["blockHash"] = "0x" + "f" * 64
+        return receipt
+
+    def handler(self, request):
+        body = json.loads(request.content)
+        is_header = (
+            body["method"] == "eth_getBlockByNumber"
+            and body["params"][0] != "finalized"
+        )
+        if is_header:
+            self.header_calls += 1
+            if self.bad_header == "unavailable":
+                return httpx.Response(503)
+        response = super().handler(request)
+        if is_header and self.bad_header:
+            content = response.json()
+            if self.bad_header == "missing":
+                content["result"] = None
+            else:
+                field, value = {
+                    "hash": ("hash", "0x" + "f" * 64),
+                    "time": ("timestamp", "0x1"),
+                    "number": ("number", "0x1"),
+                }[self.bad_header]
+                content["result"][field] = value
+            return httpx.Response(200, json=content)
+        return response
+
+
+@requires_mysql
+@pytest.mark.parametrize("crash", [False, True])
+def test_confirmed_header_time_admits_without_refetch_and_keeps_evidence(
+    mysql_engine, monkeypatch, crash
+):
+    e = mysql_engine
+    new_job(e)
+    chain = Chain(14, {11: 3})
+    a = Timestamped(chain)
+    run(e, chain, a, phase="collect")
+    before_pages = len(a.parameters)
+    with e.connect() as c:
+        original = list(c.execute(sa.select(pending_transfers)).mappings())
+    job, window = only_window(e)
+    hybrid.quarantine(
+        e,
+        job,
+        window,
+        ReconcileMismatch("old timestamp mismatch", [{"kind": "header_time_conflict"}]),
+    )
+    job_module.reset_windows(e, "bem", first=10, last=14)
+    if crash:
+
+        def fail(point):
+            if point == "before_commit":
+                raise RuntimeError("crash before time evidence commit")
+
+        monkeypatch.setattr(job_module, "fault", fail)
+        with pytest.raises(RuntimeError):
+            run(e, chain, a)
+        assert count(e, transfers) == 0
+        # Only the original quarantine evidence survives the rolled-back commit.
+        assert count(e, window_diffs) == 1
+        monkeypatch.setattr(job_module, "fault", lambda _: None)
+    result = run(e, chain, a)
+    assert result["coverage_complete"] and result["verified_through"] == 14
+    assert len(a.parameters) == before_pages
+    assert a.header_calls == (2 if crash else 1)  # one RPC per differing block
+    with e.connect() as c:
+        assert list(c.execute(sa.select(pending_transfers)).mappings()) == original
+        events = list(c.execute(sa.select(transfers)).mappings())
+        audit = list(c.execute(sa.select(window_diffs)).mappings())
+    assert len(events) == 3 and len(audit) == 4
+    for row in events:
+        source = next(r for r in original if r["tx_hash"] == row["tx_hash"])
+        assert row["block_time_utc"] == source["block_time_utc"] + timedelta(seconds=2)
+        for key in (
+            "tx_hash",
+            "log_index",
+            "block_number",
+            "from_address",
+            "to_address",
+            "amount_raw",
+        ):
+            assert row[key] == source[key]
+    resolved = [r for r in audit if r["kind"] == "header_time_confirmed"]
+    assert len(resolved) == 3
+    assert (
+        resolved[0]["detail"]["source_time_utc"]
+        == original[0]["block_time_utc"].isoformat()
+    )
+    assert verify_job(e, "bem")["ok"]
+    assert run(e, chain, a)["windows_done"] == 0
+    assert count(e, window_diffs) == 4  # rerunning does not duplicate evidence
+
+
+@requires_mysql
+@pytest.mark.parametrize(
+    "bad_header", ["hash", "time", "missing", "number", "unavailable"]
+)
+def test_time_correction_requires_matching_live_block_header(mysql_engine, bad_header):
+    e = mysql_engine
+    new_job(e)
+    chain = Chain(14, {11: 2})
+    a = Timestamped(chain, bad_header=bad_header)
+    run(e, chain, a, phase="collect")
+    if bad_header in ("missing", "number"):
+        with pytest.raises(ChainScopeError, match="区块头缺失或高度不符"):
+            run(e, chain, a)
+    else:
+        result = run(e, chain, a)
+        assert not result["transfers_complete"]
+        if bad_header != "unavailable":
+            assert result["quarantined_remaining"] == 1
+    assert count(e, transfers) == 0
+    assert count(e, pending_transfers) == 2
+    with e.connect() as c:
+        assert (
+            c.scalar(
+                sa.select(sa.func.count())
+                .select_from(window_diffs)
+                .where(window_diffs.c.kind == "header_time_confirmed")
+            )
+            == 0
+        )
+
+
+@requires_mysql
+def test_time_correction_does_not_bypass_affected_receipt_check(mysql_engine):
+    e = mysql_engine
+    new_job(e)
+    chain = Chain(14, {11: 2})
+    result = run(e, chain, Timestamped(chain, bad_receipt=True))
+    assert result["quarantined_remaining"] == 1
+    assert count(e, transfers) == 0
+    with e.connect() as c:
+        assert c.scalar(sa.select(window_diffs.c.kind)) == "receipt_mismatch"

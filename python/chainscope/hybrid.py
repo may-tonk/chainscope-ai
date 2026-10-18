@@ -184,7 +184,7 @@ def promote(
     engine, job, window, portal, rpc, pools, head, limit, hard_limit, stop=lambda: False
 ):
     """Admit one complete primary window using local checks, not a second download."""
-    from .headers import complete_headers
+    from .headers import complete_headers, confirm_transfer_times
 
     staged = pending_rows(engine, job["job_id"], window)
     with engine.connect() as c:
@@ -201,24 +201,12 @@ def promote(
     headers = complete_headers(engine, job, window, staged, portal, rpc, stop)
     if headers is None:
         return None
+    time_confirmations = confirm_transfer_times(staged, headers, rpc, stop)
+    if time_confirmations is None:
+        return None
     events = []
     for item in staged:
         header = headers[item["block_number"]]
-        if (
-            item["block_time_utc"] is not None
-            and item["block_time_utc"] != header["block_time_utc"]
-        ):
-            raise ReconcileMismatch(
-                "转账时间与区块时间不一致",
-                [
-                    {
-                        "kind": "header_time_conflict",
-                        "tx_hash": item["tx_hash"],
-                        "log_index": item["log_index"],
-                        "detail": {"block_number": item["block_number"]},
-                    }
-                ],
-            )
         events.append(
             {
                 k: item[k]
@@ -239,6 +227,12 @@ def promote(
             }
         )
     rows = [event_row(e, job["token_decimals"]) for e in events]
+    if time_confirmations:
+        affected = {(r["tx_hash"], r["log_index"]) for r in time_confirmations}
+        corrected = [r for r in rows if (r["tx_hash"], r["log_index"]) in affected]
+        # Check every affected transaction, in addition to the ordinary sample.
+        # Block time alone does not prove an event belongs to that block.
+        sample_receipts(rpc, corrected, start, count=len(corrected))
     receipts = sample_receipts(rpc, rows, start)
     if stop():
         return None
@@ -269,6 +263,7 @@ def promote(
                 "reconcile": policy,
                 "receipt_checked": receipts,
                 "parser_version": PARSER_VERSION,
+                "header_time_confirmations": time_confirmations,
             },
         )
     except (ChainScopeError, sa.exc.SQLAlchemyError):

@@ -448,6 +448,7 @@ def _store(
 ) -> dict:
     job_id, start, end = job["job_id"], window["start_block"], window["end_block"]
     extra = dict(extra or {})
+    time_confirmations = extra.pop("header_time_confirmations", [])
     with engine.begin() as connection:
         locked = (
             connection.execute(
@@ -520,6 +521,23 @@ def _store(
             )
         fault("before_done")
         now = utcnow()
+        # Evidence and formal events commit together; a failed admission must
+        # not leave a record claiming that its corrected events were admitted.
+        for offset in range(0, len(time_confirmations), CHUNK):
+            connection.execute(
+                window_diffs.insert(),
+                [
+                    {
+                        "job_id": job_id,
+                        "start_block": start,
+                        "end_block": end,
+                        "found_at_utc": now,
+                        "kind": "header_time_confirmed",
+                        **item,
+                    }
+                    for item in time_confirmations[offset : offset + CHUNK]
+                ],
+            )
         connection.execute(
             windows.update()
             .where(windows.c.job_id == job_id, windows.c.start_block == start)
