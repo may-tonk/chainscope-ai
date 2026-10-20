@@ -1,19 +1,41 @@
-# 运行与验收手册（BEM 长期采集）
+# 运行与验收手册（本地 Agent 与 CLI）
 
-日期：2026-10-15。命令都在项目根目录的 PowerShell 中执行。下文 `cs` 指 `.\.venv\Scripts\python.exe -m chainscope`，也可以换成 `uv run --all-extras --locked chainscope`。
+更新日期：2026-10-19。命令在项目根目录的 PowerShell 执行。下文 `cs` 是 CLI 简写，可在当前终端定义：
+
+```powershell
+function cs { & .\.venv\Scripts\python.exe -B -m chainscope @args }
+```
+
+## 本地采集 Agent
+
+```powershell
+.\.venv\Scripts\python.exe -B python/tools/chat_collection.py
+```
+
+在 PyCharm 也可使用 `ChainScope Agent` 运行配置。配置或代码改变后重新运行聊天入口以加载新版本。
+
+例如输入“把 bem 从已有进度继续采集到 2026-10-19 19:40（北京时间），并入库”。服务列表与既定预算内的明确要求直接执行，不要求复制编号。仅写时分默认当天北京时间、缺秒按 00；明确时刻不会被替换成启动时最新高度。只写“到现在”则固定准备计划时的最终确认高度。
+
+查询或“先看计划”不启动采集；预览后可回复“确认”。输入 `你 >` 只表示仍可提问，后台结束通知不需要新输入触发，也不定时请求 LLM。
+
+默认预算为 1800 秒、1000 次采集进程 HTTP 尝试，是安全断点处检查的软上限，包含采集重试，不包含模型调用和计划准备查询。结束、暂停或失败保存事件并触发报告；四项进度达到目标才报告完成。当前来源与预算以服务列表实际配置为准。
+
+`/exit` 退出聊天而不停止后台采集，重开补报未处理事件；“停止 bem 采集”请求安全停止。恢复原运行沿用原目标和剩余预算。额外预算及异常恢复使用 `/budget`、`/recover` 本地管理入口，不由模型自行增加额度或修改数据库。历史可通过自然语言查询，运行、事件身份和时间语义见 [数据说明](data.md)。
+
+以下为已有 CLI 操作。日常 Agent 采集不需要逐项执行这些维护命令；修复、重做、迁移和定时注册仍是单独操作。
 
 ## 1. 首次准备
 
 ```powershell
-cs init-db                      # 升级到迁移 0006，只新增表、列和索引（0006 只加 4 个可空列）
+cs init-db                      # 新环境或显式升级时执行，当前最新迁移为 0009
 cs check                        # 包括与 models.py 的完整结构比对，schema_differences 应为空
 cs job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a
 ```
 
-`job-create` 会用 eth_getCode 二分查找部署区块（约 30 次请求），并读取 decimals。也可以按北京时间指定范围，结果会显示换算出的区块和区块时间：
+上面的建库/建任务命令用于首次准备，已有 BEM 任务从保存进度续采，不重新创建。`job-create` 会用 eth_getCode 查找部署区块并读取 decimals。也可以按北京时间指定范围，结果显示换算出的区块和区块时间：
 
 ```powershell
-cs job-create --job bem --token 0x5ce0... --from 2026-10-01T08:00 --to 2026-10-08
+cs job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a --from 2026-10-01T08:00 --to 2026-10-08
 ```
 
 - 时间不带时区按北京时间；只接受整秒，带小数秒会报错（区块时间戳只精确到秒，同一秒可能有多个区块，这些区块总是一起算进或一起排除）。
@@ -70,11 +92,11 @@ cs query --job bem --from 2026-10-01 --to 2026-10-08
 - 预算参数：`--max-minutes`、`--max-requests`、`--max-cu`、`--max-windows` 都是软上限。Alchemy 主采在页面之间检查，已提交页可单独恢复；SQD 补充/核验和持仓计算在分段或窗口之间检查，已开始的事务或请求可能超出预算。旧 SQD 主采路径按窗口检查，并报告 `budget_overrun_seconds`。本次手动全采没有注册定时任务或硬超时。
 - 请求数按每次 HTTP 尝试计（含重试）；Alchemy 计算单元只按成功返回的调用估算。
 - `status` 的 `lag_blocks` 用刚读取的最终确认高度计算，并给出读取时间 `head_observed_at_utc`；读不到时 `behind` 为 `unknown`，不会用旧高度代替。
-- 每个窗口的进度记录在 `logs/sync-YYYYMMDD.jsonl`。
+- 连续进度以 MySQL 为准。日志由具体入口产生；手动历史入口写 JSONL，Agent 后台输出写 `logs/agent-<run_id>.log`，正常进度主要保存在控制表中。
 - `sync` 的 `quarantined` 只列本次新发现的问题，`quarantined_remaining` 是数据库中尚未处理的隔离窗口总数。旧隔离窗口在重启后仍使退出码为 3；没有可运行窗口但仍有隔离窗口时，`stopped` 为 `quarantined`，不会显示 `caught_up`。`coverage_complete` 表示连续水位是否覆盖本次的 `target_block`；预算用尽返回成功退出码只表示本轮正常停止，不代表整个任务完成。
 - Portal 时间换算或日志流遇到 HTTP 529 时有限重试，读取 `Retry-After`；持续失败会明确报错，不把失败当成空数据，也不估算区块号。
 - 窗口拆分时，日志里的 `reason` 说明原因：`event_limit` 表示读到 `at_block` 时累计 `held` 条，超过了 `event_limit`；`line_too_long` 表示单个区块的响应超过 32 MiB。
-- 公共 Portal 不需要密钥。SQD 官方价格页注明 Portal billing 尚未上线，公布的套餐流量和带宽不能当作已实测生效的账号额度，也不能据此把 HTTP 529 判断为额度耗尽。已有密钥写进 `.env` 的 `SQD_API_KEY`；需要换 Portal 地址时设置 `SQD_PORTAL_URL`。
+- 来源连接通过 `.env` 的 `SQD_API_KEY`、`SQD_PORTAL_URL` 等配置。套餐、流量和额度以实际账号及供应商当前规则为准，不能仅凭 HTTP 529 推断额度耗尽。程序有限重试后明确返回失败。
 
 持仓与行情：
 
@@ -82,10 +104,10 @@ cs query --job bem --from 2026-10-01 --to 2026-10-08
 cs holders --job bem --top 80             # 前 80 持有人，持仓数据截至 as_of_block
 cs holders --job bem --at-block 45000000  # 历史某区块的排行（需在水位以内）
 cs holders-verify --job bem --top 20      # 与链上 totalSupply、balanceOf 比对，退出码 3 表示不一致
-cs market --job bem                       # 每小时一次即可；公开接口约每分钟 30 次
+cs market --job bem                       # 已有可选 CLI 功能，未接入采集 Agent
 ```
 
-`market` 的价格、市值、成交量来自第三方，只作参考；链上价格（V2 储备或 V3 slot0）与 GeckoTerminal 相差超过 2% 会在 warnings 中提示。CoinGecko 若没有收录 BEM，记录为 listed=false。可在 `.env` 设置 `COINGECKO_API_KEY`（Demo key）提高限额。
+`market` 的价格、市值、成交量来自第三方，只作参考；链上价格（V2 储备或 V3 slot0）与 GeckoTerminal 相差超过代码阈值会提示。未收录时记录 listed=false；连接及限额按实际配置与接口响应处理。正常采集不要求执行行情和研究分析命令。
 
 ## 3. 定时运行
 
