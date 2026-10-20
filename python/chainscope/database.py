@@ -9,11 +9,12 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy.exc import SQLAlchemyError
 
+from .agent_models import AGENT_TABLES
 from .config import ROOT, Settings
 from .errors import ChainScopeError
 from .models import batch_events, batches, metadata, transfers
 
-SCHEMA_REVISION = "0008"
+SCHEMA_REVISION = "0009"
 SCHEMA_TABLES = (
     "collection_batches",
     "transfer_events",
@@ -59,12 +60,18 @@ def database_error(exc: SQLAlchemyError) -> ChainScopeError:
     )
 
 
-def schema_differences(connection) -> list[str]:
+def schema_differences(connection, *, include_agent=True) -> list[str]:
     """Columns, indexes and constraints that differ from models.py."""
     context = MigrationContext.configure(
         connection, opts={"compare_type": True, "compare_server_default": False}
     )
-    diffs = compare_metadata(context, metadata)
+    expected = metadata
+    if not include_agent:
+        expected = sa.MetaData()
+        for name, table in metadata.tables.items():
+            if name not in AGENT_TABLES:
+                table.to_metadata(expected)
+    diffs = compare_metadata(context, expected)
     lines = []
     for diff in diffs:
         item = diff[0] if isinstance(diff, list) else diff
@@ -83,14 +90,23 @@ def check_database(engine, *, full: bool = False):
             if "alembic_version" in tables
             else None
         )
-        ready = revision == SCHEMA_REVISION and all(t in tables for t in SCHEMA_TABLES)
+        # Core collection remains usable before the optional agent upgrade.
+        ready = revision in ("0008", SCHEMA_REVISION) and all(
+            t in tables for t in SCHEMA_TABLES
+        )
+        agent_ready = revision == SCHEMA_REVISION and all(
+            t in tables for t in AGENT_TABLES
+        )
         result = {
             "mysql_version": version,
             "migration_revision": revision,
             "schema_ready": ready,
+            "agent_schema_ready": agent_ready,
         }
         if full and ready:
-            result["schema_differences"] = schema_differences(connection)
+            result["schema_differences"] = schema_differences(
+                connection, include_agent=revision == SCHEMA_REVISION
+            )
             result["schema_ready"] = not result["schema_differences"]
     return result
 

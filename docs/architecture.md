@@ -1,79 +1,72 @@
 # 项目目录与模块职责
 
-全部人工维护文件按类型放置，目录最多嵌套一层。后续功能沿用这一结构。
+更新日期：2026-10-19。本文描述当前代码；命令见 [README](../README.md)，操作步骤见 [运行手册](operations.md)。
 
 ## 目录
 
-```text
-chainscope-ai/
-  python/                       # 只放 Python
-    chainscope/                 # 业务模块，直接放 .py
-    tests/                      # 单元测试和 MySQL 测试，直接放 .py
-    tools/                      # 环境检查、异常演示，直接放 .py
-    migration_env/              # Alembic 运行入口 env.py
-    migrations/                 # 迁移版本 0001、0002
-  sql/                          # acceptance.sql、migration-0001.sql
-  docs/                         # 所有已有 Markdown，平铺
-  samples/                      # CSV 历史样本
-  reports/                      # JSON 验收报告、样本来源元数据
-  raw/                          # 可选调试 JSON 和保留的历史证据
-    <batch-id>/                 # 新调试批次只有 RPC 响应和 manifest.json
-  logs/                         # 日志输出
-  .run/                         # PyCharm XML 运行配置
-  .venv/                        # 自动管理的依赖环境
-  build/                        # 旧缓存、工具元数据和构建输出
-  pyproject.toml                # 依赖、打包和测试配置
-  uv.lock                       # 固定依赖版本
-  requirements-dev.txt          # 固定版本的 pip 导出
-  alembic.ini                   # 迁移路径配置
-  .env / .env.example            # 私密配置与模板
-  .gitignore
-  AGENTS.md
-  README.md
-```
+人工维护文件按类型放置，Python 子目录中直接放文件，不再增加业务子目录。
 
-根目录保留打包、环境与协作工具要求的入口文件。`.venv`、缓存、egg-info 和 build 是自动生成内容，在 PyCharm 中排除；一层限制针对人工维护内容，不修改依赖包内部结构。整理时旧目录中的缓存、占位符和 IDE 元数据保留在被排除的 build，运行不依赖这些内容。
-
-## Python 文件职责
-
-| 文件（均位于 python/chainscope） | 职责 |
+| 位置 | 内容 |
 | --- | --- |
-| __init__.py | 包标识 |
-| __main__.py | CLI 参数、命令分派、错误和退出码 |
-| config.py | 设置、私密配置、项目根路径 |
-| errors.py | 可安全显示的业务错误 |
-| pipeline.py | 批次生命周期、采集与入库编排 |
-| rpc_client.py | JSON-RPC 请求、超时、重试、成功响应归档 |
-| archive.py | 显式调试输出的单批/总容量检查、共享锁和原子文件发布 |
-| collector.py | 固定区间、分页、调用解析与核验 |
-| parser.py | 精确字段和金额转换 |
-| validator.py | 交易回执核验 |
-| models.py | 当前 SQLAlchemy 表定义 |
-| database.py | MySQL 连接、迁移、事务、去重、读回核对 |
-| records.py | 历史 CSV 样本检查 |
+| `python/chainscope` | CLI、采集业务、Agent 和数据库访问代码 |
+| `python/tests` | 模拟测试、临时 MySQL 测试和可选真实模型检查 |
+| `python/tools` | 聊天入口、环境检查、测量和手动采集等辅助入口 |
+| `python/migration_env` | Alembic 执行入口 `env.py` |
+| `python/migrations` | 保持连续的迁移版本 `0001`～`0009` |
+| `config` | 代币服务列表、本地身份和地址标签 |
+| `docs` | 当前说明及注明日期的历史设计、学习和验证记录 |
+| `sql` | Navicat 查询及历史初始迁移 SQL 导出 |
+| `samples` | 固定 CSV 样本 |
+| `reports` | 样本来源和专项结果；Agent 结束报告主要在 MySQL |
+| `raw/<batch-id>` | 可选调试响应和历史证据，保留数据库引用的路径 |
+| `logs` | CLI 或后台进程输出，不代替数据库进度 |
+| `.run` | PyCharm 共享运行配置 |
+| `.venv`、`*.egg-info` | 安装工具管理的环境和元信息，不是手写源码 |
+| `build`（若存在） | 构建或旧临时产物；清理前核对独有资料，不作为运行入口 |
 
-CLI/config → pipeline → collector → rpc_client/parser/validator → database → 数据库读回核对。
+根目录保留环境、依赖、迁移和协作工具所需配置。环境、缓存、构建目录和安装元信息从 IDE 日常源码搜索中排除即可，不通过移动解释器整理目录。
 
-collect 默认先记录数据库批次，在内存解析和核验，再在同一 MySQL 事务提交事件、批次关联和成功状态，最后读回核对；不创建 raw 批次目录或 JSON。显式 --save-raw 和 fetch 才保存调试 RPC 响应与摘要，受单批默认 10 MiB、raw 总内容 100 MiB 限制，不生成 events.json。保留旧文件，未实现自动到期清理和归档回放。永久进度、自动恢复和大规模性能仍待实现。
+## 当前采集流程
 
-## 路径与运行
+日常任务由 `hybrid.sync_hybrid` 执行：Alchemy 按窗口采集和正式提交 Transfer，SQD 独立发现配置范围的池子、补充 Swap。MySQL 保存进度、分页断点、失败窗口和持仓缓存。一轮运行固定截止位置，不自动追随运行后新增区块。
 
-pyproject.toml 从 python 查找并安装 chainscope；pytest 从 python/tests 发现测试。config.ROOT 仍定位项目根目录，.env 和解释器位置不变。PyCharm 父工作区源码根已改为 chainscope-ai/python。
+聊天入口是 `python/tools/chat_collection.py`，也可运行 `python -B -m chainscope.agent_runtime`。OpenAI Agents SDK 处理对话与工具调用，DeepSeek 提供模型；独立后台进程执行采集，结束后保存事件并通知聊天入口生成报告。
 
-Alembic 的 script_location 指向 python/migration_env，version_locations 指向并列的 python/migrations，避免 migration/versions 再增加一层。冻结的 0001 不改写；0002 允许 raw_directory 为 NULL，表示批次没有归档。
+| 模块 | 职责 |
+| --- | --- |
+| `agent_runtime.py`、`agent_console.py` | 模型和对话调度、单一输入读取、异步显示 |
+| `agent_contracts.py`、`agent_tools.py` | Pydantic 合同、JSON Schema 生成、工具注册和调用适配 |
+| `agent_intent.py`、`token_registry.py` | 从用户原话绑定范围和截止条件，读取代币服务列表及策略 |
+| `agent_service.py`、`agent_backend.py` | 准备、启动、查询、停止等规则；检查目标并接入既有采集 |
+| `agent_models.py`、`agent_store.py` | 四张 Agent 控制表定义，以及计划、运行、尝试和授权的事务操作 |
+| `agent_worker.py` | 后台采集、心跳、预算、安全停止和最终结果保存 |
+| `agent_notifications.py` | 结束事件、历史查询、报告处理权、本地进程通信和退出监听 |
+| `agent_reports.py` | 按绑定事件生成报告，核对身份与状态，附上快照事实 |
 
-```powershell
-# 从仓库根目录执行
-uv sync --all-extras --locked
-./.venv/Scripts/python.exe -m chainscope --help
-./.venv/Scripts/python.exe -m chainscope init-db
-./.venv/Scripts/python.exe -m pytest -q
-./.venv/Scripts/python.exe -m ruff check python
-```
+五个采集工具为 `get_collection_status`、`prepare_collection`、`start_collection`、`get_collection_run`、`stop_collection`；另有只读的 `list_collection_runs` 和 `get_collection_event`。12 个 `agent_*.py` 是职责模块，不代表同时运行 12 个模型。
 
-## 后续约定
+明确采集指令在服务列表和既定预算内直接执行；查询、预览不会授权启动。明确时刻先锁定时间边界，再定位区块；转账、Swap、池子和持仓四项覆盖全部达到目标才记录 `completed`。`你 >` 表示输入仍可用，后台结束报告可在没有新输入时显示。
 
-- 新 Python 文件只放 python 下已有职责目录，各目录不再嵌套。
-- SQL、Markdown、CSV、JSON、日志、IDE 配置各归其类；说明文档不放进代码或数据目录。
-- 采集数据按批次嵌套一层，不另建逐交易子目录。
-- 本次仅整理目录与引用。测试范围内的精度、事务和去重已经验证；业务所需的覆盖证明、恢复、容量和持续运行仍需另行实现并验收。
+## 原有业务模块
+
+| 模块 | 职责 |
+| --- | --- |
+| `__main__.py`、`config.py`、`errors.py` | CLI 分派、私密配置和安全错误 |
+| `rpc_client.py`、`collector.py`、`parser.py`、`validator.py` | RPC、Alchemy 小范围采集、字段解析和回执核验 |
+| `pipeline.py`、`archive.py`、`records.py` | 小范围批次编排、显式调试归档、历史 CSV 检查 |
+| `models.py`、`database.py` | 业务表定义、连接、显式迁移、批次事务和读回核对 |
+| `jobs.py`、`ingestion.py`、`sync.py`、`hybrid.py` | 持久化任务、分页暂存、连续水位和主采流程 |
+| `sqd.py`、`headers.py`、`dex.py`、`supplement.py` | SQD、区块头缓存、池子发现和独立 Swap 补充 |
+| `transaction_checks.py`、`reconcile.py`、`acceptance.py` | 窗口回执检查、跨源复查和有限范围验收 |
+| `balances.py`、`holders.py`、`query.py`、`market.py` | 持仓缓存、排行、范围查询及行情等已有 CLI 功能 |
+| `recovery.py`、`formal_recovery.py` | 显式核验或修复；采集 Agent 不开放这些操作 |
+
+`collect` 是早期小范围批次工具，其事件不属于长期任务；日常增量使用 `sync` 或采集 Agent。行情、研究分析和长期 memory 尚未接入 Agent。
+
+## 保存与验证边界
+
+默认采集持久化到 MySQL，不按事件生成 JSON。`raw` 用于历史证据或显式调试；`reports` 保存专项结果；Agent 进度、结束快照和报告正文存放在控制表中。它们都不代替数据库备份。
+
+`config.ROOT` 根据源码位置找到项目根目录。打包从 `python` 加载业务包，Alembic 使用并列的迁移入口和版本目录。本地身份和数据库引用的归档路径需要保留。
+
+已实现持久化任务、分页恢复、连续水位、独立 Swap 进度、后台执行和结束报告。2026-10-19 已完成一次 BEM 增量到明确时刻的真实闭环，证据见 README。模拟、临时 MySQL 和正式运行分别记录；这不自动证明全部代币、DEX、外部来源完整性或长期持续运行已验收。

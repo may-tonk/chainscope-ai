@@ -1,21 +1,40 @@
 # 数据库迁移
 
-存放 MySQL 表结构的版本化迁移。初始 `0001` 已在真实 MySQL 8.0.43 执行，重复运行成功。
+更新日期：2026-10-19。当前最新版本为 `0009`。MySQL 表结构由 Alembic 管理，Navicat 用于查看和核对。
 
-2026-10-13 新增并执行 `0002_optional_archive.py`，仅将 collection_batches.raw_directory 改为可空。默认 collect 无归档时保存 SQL NULL；旧批次路径、事件和关联保持完整。数据库初始化执行到最新版本，不改写历史 0001。
+## 执行入口
 
-`python/migrations/0001_initial.py` 冻结三张业务表的初始定义：collection_batches、transfer_events、batch_events。迁移入口在 `python/migration_env/env.py`，alembic.ini 用 script_location 和 version_locations 指定两个并列目录，避免三层嵌套。用项目 CLI `init-db` 创建指定数据库并执行 Alembic。后续变更添加新版本，保留已执行版本；不要编辑已执行迁移去改变现有数据库。破坏性 downgrade 被禁用。
+入口为 `python/migration_env/env.py`，版本脚本在并列的 `python/migrations`；路径由 `alembic.ini` 和 CLI 配置。新环境建库或显式升级前先核对目标数据库：
 
-Navicat 用于连接数据库和检查结果；正式结构变更必须保留迁移文件和验证记录。
+```powershell
+.\.venv\Scripts\python.exe -B -m chainscope init-db
+.\.venv\Scripts\python.exe -B -m chainscope check
+```
 
-迁移目标为 MySQL，计划使用 InnoDB、utf8mb4 和 Alembic。不要直接复用其他数据库的金额类型或冲突写入语法：MySQL DECIMAL 最大精度为 65 位，而完整 uint256 可以有 78 位十进制数字。原始金额需要用规范十进制字符串或 32 字节二进制完整保存；金额聚合时再明确可用数值范围或使用 Python 精确整数计算。
+`init-db` 是写操作，会创建指定库并沿版本链升级。已经就绪的数据库日常采集无需重复执行，聊天程序也不自动迁移。`check` 只读核对 RPC、数据库连接和结构，`schema_differences` 应为空。
 
-依据：[MySQL DECIMAL 文档](https://dev.mysql.com/doc/refman/8.0/en/precision-math-decimal-characteristics.html)。`VARCHAR(78)`、数字格式和 uint256 上限 CHECK、事件唯一键已通过真实数据库测试。
+## 版本职责
 
-2026-10-15 新增 `0003_jobs_windows.py`：新建 scan_jobs、coverage_windows、window_events 三张表，并给 collection_batches 增加可空的 job_id 列，用于长期采集任务的窗口进度与续采。只新增表和可空列，不改动已有数据；`check` 要求结构版本为 0003，已有数据库执行一次 `init-db` 即可升级。
+| 版本 | 主要变更 |
+| --- | --- |
+| `0001` | 批次、Transfer 和批次事件关联 |
+| `0002` | `raw_directory` 可空，支持默认不归档 |
+| `0003` | 长期任务、采集窗口、窗口关联和批次任务标识 |
+| `0004` | 回执检查记录、金额排序辅助列和差异记录 |
+| `0005` | DEX、Swap、持仓、标签及行情结构 |
+| `0006` | 部署/终点区块、指纹版本和池子集合等兼容字段 |
+| `0007` | `transfer_ingestion`、`pending_transfers`，区分分页暂存与正式数据 |
+| `0008` | 区块头缓存、独立补充进度和 Swap 窗口 |
+| `0009` | `agent_plans`、`agent_runs`、`agent_attempts`、`agent_events` |
 
-2026-10-15 新增 `0004_reconcile_amounts.py`：coverage_windows 增加 receipt_checked，transfer_events 增加生成列 amount_len 和金额排序索引，新建 window_diffs 记录对账差异。
+`0009` 只描述新增的四张 Agent 表，不包含前面所有建表步骤。新建库、升级旧环境和部分旧版本恢复后的升级仍需要完整版本链。
 
-2026-10-15 新增 `0005_dex_holders_market.py`：scan_jobs 增加 balances_through，coverage_windows 增加 swap_count；新建 dex_pools、swap_events、address_balances（DECIMAL(65,0)，超过 65 位的金额会被拒绝累计）、address_info、address_labels、market_snapshots、pool_snapshots、pool_ohlcv。只新增表和可空列，已有数据不变，执行一次 `init-db` 即可升级。
+## 保留与兼容
 
-2026-10-15 新增 `0006_review_fixes.py`（评审修正）：scan_jobs 增加 deploy_block、end_block，coverage_windows 增加 fingerprint_version、pool_set，四列都可空。只加列，不改已有行。已有窗口的 fingerprint_version 为空，表示用第 1 版指纹（不含区块号）计算，verify-job 按这一版本核对，不需要重算；新窗口用第 2 版（含区块号）。已有任务的 deploy_block 为空时，query 不会把起点之前的区块说成"没有事件"，只标为未采集。
+- `models.py` 与 `agent_models.py` 描述当前期望结构，改 Python 类型定义不会自动改变数据库。
+- 已执行版本保留原样，结构变化新增迁移；破坏性 downgrade 被禁用。本轮清理不合并迁移。
+- 原始 uint256 金额使用规范字符串完整保存；持仓缓存的 `DECIMAL(65,0)` 有独立范围限制，超限拒绝累计。
+- `0008` 仍可使用原 CLI 采集和只读进度检查；完整 Agent 要求 `0009` 和四张控制表。
+- `sql/migration-0001.sql` 是历史初始导出，不是当前完整建库入口。
+
+升级恢复点、结构核对和历史数据验证分别记录。测试使用随机临时库，不通过降级正式库做迁移实验，见 [MySQL 测试](mysql-tests.md)。

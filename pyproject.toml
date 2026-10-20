@@ -51,6 +51,12 @@ dev = [
     "pre-commit>=4,<5",
     "types-requests",
 ]
+agent = [
+    "openai>=3.35.1",
+    "openai-agents>=0.24.0",
+    "psutil>=7.2.2,<8",
+    "prompt-toolkit>=3.0.53,<4",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

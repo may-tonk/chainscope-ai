@@ -14,6 +14,7 @@ raw/*
 .pytest_cache/
 .ruff_cache/
 .idea/
+config/agent_local.toml
 # Local collaboration context, workstation troubleshooting and generated reports.
 AGENTS.md
 reports/*
