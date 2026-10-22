@@ -137,7 +137,7 @@ CLI / 配置 → 固定范围分页采集 → 精确解析 → 回执核验
 ### 长期采集 BEM
 
 ```powershell
-uv run --all-extras --locked chainscope init-db        # 升级到 0007（保留旧表和进度）
+uv run --all-extras --locked chainscope init-db        # 升级到当前最新版本 0009（保留旧表和进度）
 uv run --all-extras --locked chainscope job-create --job bem --token 0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a
 uv run --all-extras --locked chainscope sync --job bem --max-minutes 30
 uv run --all-extras --locked chainscope status --job bem
