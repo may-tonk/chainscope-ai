@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import httpx
 
 from .dex import block_swaps, swap_log_filter
-from .errors import BlockTooLarge, ChainScopeError
+from .errors import BlockTooLarge, ChainScopeError, SourceOverloaded
 from .parser import ADDRESS, HASH, fixed_hex, quantity
 from .rpc_client import read_limited
 from .validator import TRANSFER_TOPIC
@@ -21,9 +21,14 @@ DEFAULT_DATASET = "binance-mainnet"
 # window records the version that actually parsed it, and `redo` without a
 # range resets only windows below the current version.
 PARSER_VERSION = 1
-# The public Portal also intermittently returns 529 for time lookups.
-# Treat it as a transient server error, under the same finite retry limit.
 RETRY_STATUS = (429, 500, 502, 503, 504, 529)
+# 529 is SQD's rate_limit_error/overloaded answer (with Retry-After) when the
+# shared public Portal is at capacity; 429 is a per-client limit. Both mean
+# "wait", not "broken": keep waiting as asked, and give up only after this
+# many seconds pass without any successful response.
+OVERLOAD_STATUS = (429, 529)
+OVERLOAD_PATIENCE = 300
+OVERLOAD_DEFAULT_WAIT = 10
 # One line of the stream is one block. 32 MiB holds about 70,000 Transfer logs,
 # more than BLOCK_HARD_LIMIT, so the item limit is what normally stops a block.
 MAX_LINE_BYTES = 32 * 1024 * 1024
@@ -74,8 +79,10 @@ class Portal:
         sleep=time.sleep,
         clock=time.monotonic,
         min_interval: float = 0.5,
+        overload_patience: float = OVERLOAD_PATIENCE,
     ):
         self._base = base.rstrip("/")
+        self._overload_patience = overload_patience
         self.dataset = dataset
         self._client = client
         # Testing and paid Portal plans take a key; the public Portal needs none.
@@ -112,9 +119,35 @@ class Portal:
         self._notify(f"Portal {what}: {reason}，第 {failures} 次，{wait} 秒后重试")
         self._sleep(wait)
 
+    def _throttle(self, since, what, status, retry_after):
+        """Wait as an overloaded Portal asks; return when the waiting began.
+
+        `since` is None at the first overload after a success. Stops with
+        SourceOverloaded once the Portal has been overloaded for longer than
+        the patience limit, so a busy Portal never looks like an empty range.
+        """
+        now = self._clock()
+        since = now if since is None else since
+        if now - since >= self._overload_patience:
+            raise SourceOverloaded(
+                f"Portal {what}: 持续过载 {int(now - since)} 秒仍未恢复"
+                f"（HTTP {status}，服务端要求稍后重试），停止"
+            )
+        wait = OVERLOAD_DEFAULT_WAIT
+        if retry_after and retry_after.strip().isdigit():
+            wait = min(int(retry_after.strip()), 120)
+        self.stats["rate_limited" if status == 429 else "server_errors"] += 1
+        self.stats["overloaded"] += 1
+        self.stats["retries"] += 1
+        self.stats["wait_seconds"] += wait
+        self._notify(f"Portal {what}: HTTP {status} 服务端过载，{wait} 秒后重试")
+        self._sleep(wait)
+        return since
+
     def get(self, path: str):
         url = f"{self._base}/{path}"
         failures = 0
+        overloaded_since = None
         while True:
             self._pace()
             try:
@@ -132,6 +165,11 @@ class Portal:
             except httpx.TransportError:
                 failures += 1
                 self._backoff(failures, path)
+                continue
+            if status in OVERLOAD_STATUS:
+                overloaded_since = self._throttle(
+                    overloaded_since, path, status, retry_after
+                )
                 continue
             if status in RETRY_STATUS:
                 failures += 1
@@ -170,6 +208,7 @@ class Portal:
         url = f"{self._base}/datasets/{self.dataset}/finalized-stream"
         cursor = start
         failures = 0
+        overloaded_since = None
         while cursor <= end:
             self._pace()
             body = {**query, "fromBlock": cursor, "toBlock": end}
@@ -193,6 +232,7 @@ class Portal:
                             cursor = number + 1
                             received += 1
                             failures = 0
+                            overloaded_since = None
                             yield block
                     self.stats["bytes"] += response.num_bytes_downloaded
             except (httpx.TransportError, httpx.DecodingError):
@@ -202,6 +242,11 @@ class Portal:
             if status == 200:
                 if received == 0:
                     return  # Portal: empty body means no more matches in the range.
+                continue
+            if status in OVERLOAD_STATUS:
+                overloaded_since = self._throttle(
+                    overloaded_since, "stream", status, retry_after
+                )
                 continue
             if status in RETRY_STATUS:
                 failures += 1

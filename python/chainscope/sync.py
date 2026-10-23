@@ -224,7 +224,8 @@ def create(
             engine,
             job_id,
             token,
-            source="sqd",
+            # The Transfer primary; SQD only supplements pools and Swaps.
+            source="alchemy",
             start_block=start_block,
             window_size=window_size,
             parser_version=PARSER_VERSION,
@@ -405,7 +406,9 @@ def sync_job(
         if job["status"] != "active":
             raise ChainScopeError(f"任务 {job_id} 已暂停")
         if job["source"] != "sqd":
-            raise ChainScopeError(f"暂不支持数据源 {job['source']}")
+            raise ChainScopeError(
+                f"任务主来源为 {job['source']}；旧 SQD 主采路径只用于原 SQD 任务，请使用默认 Alchemy 主采"
+            )
         token = job["token_address"]
         summary["pools"] = len(pools)
         summary["recovered_abandoned"] = recover_abandoned(engine, job_id)

@@ -6,9 +6,10 @@ import httpx
 import pytest
 
 from chainscope.collector import transfer_totals
-from chainscope.errors import ChainScopeError
+from chainscope.errors import ChainScopeError, SourceOverloaded
 from chainscope.rpc_client import RpcClient
 from chainscope.sqd import (
+    OVERLOAD_PATIENCE,
     Portal,
     TooManyEvents,
     block_transfers,
@@ -228,8 +229,36 @@ def test_time_lookup_retries_529_and_honors_retry_after():
     assert client.stats["requests"] == 2
 
 
-def test_time_lookup_persistent_529_stops_after_finite_retries():
-    client = portal(lambda _: httpx.Response(529))
+def test_persistent_overload_waits_up_to_patience_then_stops():
+    clock = Clock()
+    client = portal(lambda _: httpx.Response(529, headers={"Retry-After": "10"}), clock)
+    with pytest.raises(SourceOverloaded, match="持续过载"):
+        client.block_at(1_791_907_200)
+    # Waited as asked for the whole patience, not just seven attempts.
+    assert clock.now == OVERLOAD_PATIENCE
+    assert client.stats["requests"] == OVERLOAD_PATIENCE // 10 + 1
+    assert client.stats["overloaded"] == OVERLOAD_PATIENCE // 10
+
+
+def test_overload_patience_restarts_after_each_received_block():
+    clock = Clock()
+    responses = [
+        httpx.Response(529, headers={"Retry-After": "120"}),
+        httpx.Response(529, headers={"Retry-After": "120"}),
+        httpx.Response(200, content=lines(block(10))),
+        httpx.Response(529, headers={"Retry-After": "120"}),
+        httpx.Response(529, headers={"Retry-After": "120"}),
+        httpx.Response(200, content=b""),
+    ]
+    client = portal(stream_handler(responses, []), clock)
+    got = [b["header"]["number"] for b in client.stream({}, 10, 20)]
+    # 480 seconds of waiting in total, but never 300 without progress.
+    assert got == [10]
+    assert clock.sleeps == [120, 120, 120, 120]
+
+
+def test_other_server_errors_keep_the_finite_retry_limit():
+    client = portal(lambda _: httpx.Response(503))
     with pytest.raises(ChainScopeError, match="连续失败 7 次"):
         client.block_at(1_791_907_200)
     assert client.stats["requests"] == 7

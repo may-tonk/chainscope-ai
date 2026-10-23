@@ -27,6 +27,7 @@ from chainscope.agent_runtime import build_agent, local_owner
 from chainscope.agent_service import Service
 from chainscope.agent_store import Store, now, shown
 from chainscope.agent_worker import execute_worker
+from chainscope.errors import SourceUnavailable
 from chainscope.token_registry import AgentError, Registry
 
 OWNER = str(uuid4())
@@ -96,6 +97,8 @@ class FakeBackend:
             return {"stopped": "stop_requested", "quarantined_remaining": 1}
         if self.finish == "stop":
             return {"stopped": "max_runtime"}
+        if self.finish == "source_down":
+            raise SourceUnavailable("primary source quota exhausted")
         self.progress = Progress(
             observed_at=shown(),
             collected_through=20,
@@ -378,6 +381,29 @@ def test_worker_states_and_secret_redaction(control, finish, expected):
     assert service.store.active("bem", OWNER) is None
     assert not execute_worker(service.store, service.backend, *launches[0])
     assert saved.budget.used_http_attempts == 9
+
+
+@pytest.mark.parametrize(
+    "first_attempt, inserted", [("stop", 12), ("source_down", None)]
+)
+def test_run_counters_stay_unknown_after_an_uncounted_attempt(
+    control, first_attempt, inserted
+):
+    service, launches = control
+    service.backend.finish = first_attempt
+    data = start(service, prepare(service))
+    execute_worker(service.store, service.backend, *launches[0])
+    _, paused = service.store.run(data["run_id"], OWNER)
+    assert paused.state == "paused"
+    service.backend.finish = "complete"
+    start(service, prepare(service, "resume", run_id=data["run_id"]))
+    execute_worker(service.store, service.backend, *launches[1])
+    _, done = service.store.run(data["run_id"], OWNER)
+    assert done.state == "completed" and done.attempt_count == 2
+    # A failed attempt's inserts were never counted, so the run total must
+    # stay unknown instead of showing only the last attempt's 12 as exact.
+    assert done.run_counters.inserted_transfers == inserted
+    assert done.run_counters.transfer_windows == (1 if inserted else None)
 
 
 def test_recovery_never_takes_live_worker_and_unknown_budget_is_not_reset(control):

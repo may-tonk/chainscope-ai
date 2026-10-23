@@ -2,7 +2,7 @@
 version = 1
 
 [policy]
-max_runtime_seconds = 1800
+max_runtime_seconds = 21600
 max_http_attempts = 1000
 plan_ttl_seconds = 900
 poll_interval_seconds = 15

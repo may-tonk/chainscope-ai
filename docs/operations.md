@@ -18,7 +18,7 @@ function cs { & .\.venv\Scripts\python.exe -B -m chainscope @args }
 
 查询或“先看计划”不启动采集；预览后可回复“确认”。输入 `你 >` 只表示仍可提问，后台结束通知不需要新输入触发，也不定时请求 LLM。
 
-默认预算为 1800 秒、1000 次采集进程 HTTP 尝试，是安全断点处检查的软上限，包含采集重试，不包含模型调用和计划准备查询。结束、暂停或失败保存事件并触发报告；四项进度达到目标才报告完成。当前来源与预算以服务列表实际配置为准。
+默认预算为 21600 秒（360 分钟）、1000 次采集进程 HTTP 尝试，是安全断点处检查的软上限，包含采集重试，不包含模型调用和计划准备查询。结束、暂停或失败保存事件并触发报告；四项进度达到目标才报告完成。当前来源与预算以服务列表实际配置为准。
 
 `/exit` 退出聊天而不停止后台采集，重开补报未处理事件；“停止 bem 采集”请求安全停止。恢复原运行沿用原目标和剩余预算。额外预算及异常恢复使用 `/budget`、`/recover` 本地管理入口，不由模型自行增加额度或修改数据库。历史可通过自然语言查询，运行、事件身份和时间语义见 [数据说明](data.md)。
 
@@ -92,9 +92,10 @@ cs query --job bem --from 2026-10-01 --to 2026-10-08
 - 预算参数：`--max-minutes`、`--max-requests`、`--max-cu`、`--max-windows` 都是软上限。Alchemy 主采在页面之间检查，已提交页可单独恢复；SQD 补充/核验和持仓计算在分段或窗口之间检查，已开始的事务或请求可能超出预算。旧 SQD 主采路径按窗口检查，并报告 `budget_overrun_seconds`。本次手动全采没有注册定时任务或硬超时。
 - 请求数按每次 HTTP 尝试计（含重试）；Alchemy 计算单元只按成功返回的调用估算。
 - `status` 的 `lag_blocks` 用刚读取的最终确认高度计算，并给出读取时间 `head_observed_at_utc`；读不到时 `behind` 为 `unknown`，不会用旧高度代替。
-- 连续进度以 MySQL 为准。日志由具体入口产生；手动历史入口写 JSONL，Agent 后台输出写 `logs/agent-<run_id>.log`，正常进度主要保存在控制表中。
+- 连续进度以 MySQL 为准。日志由具体入口产生；手动历史入口写 JSONL。Agent 后台进程把采集事件（窗口提交、池子发现分段、暂停原因等，每个窗口一条，不含每次 529 重试）写入 `logs/agent-<run_id>.jsonl`；进程意外退出时，异常类名写入 `logs/agent-<run_id>.log`。正常进度主要保存在控制表中；暂停原因也写入运行记录的 `last_error.message`。
 - `sync` 的 `quarantined` 只列本次新发现的问题，`quarantined_remaining` 是数据库中尚未处理的隔离窗口总数。旧隔离窗口在重启后仍使退出码为 3；没有可运行窗口但仍有隔离窗口时，`stopped` 为 `quarantined`，不会显示 `caught_up`。`coverage_complete` 表示连续水位是否覆盖本次的 `target_block`；预算用尽返回成功退出码只表示本轮正常停止，不代表整个任务完成。
-- Portal 时间换算或日志流遇到 HTTP 529 时有限重试，读取 `Retry-After`；持续失败会明确报错，不把失败当成空数据，也不估算区块号。
+- Portal 返回 HTTP 529（SQD 的 `rate_limit_error`/`overloaded`，公共 Portal 满载）或 429 时，按 `Retry-After` 等待后从最后收到的区块继续；连续 5 分钟没有任何成功响应才停止并报告“持续过载”。其他 5xx 和网络错误仍是连续 7 次失败后停止。失败不会当成空数据，也不会估算区块号。
+- 补区块头时 SQD 失败，日志会记录 `block_headers: sqd_unavailable` 和原因。改用主节点需要每个区块一次请求；剩余请求预算不够时，本次运行暂停并报告 `BLOCK_HEADERS_UNAVAILABLE`，不消耗这些请求。已取得的区块头保留，续采时接着补。
 - 窗口拆分时，日志里的 `reason` 说明原因：`event_limit` 表示读到 `at_block` 时累计 `held` 条，超过了 `event_limit`；`line_too_long` 表示单个区块的响应超过 32 MiB。
 - 来源连接通过 `.env` 的 `SQD_API_KEY`、`SQD_PORTAL_URL` 等配置。套餐、流量和额度以实际账号及供应商当前规则为准，不能仅凭 HTTP 529 推断额度耗尽。程序有限重试后明确返回失败。
 
