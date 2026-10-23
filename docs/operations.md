@@ -143,6 +143,8 @@ cs verify-job --job bem               # 只查 MySQL 内部：指纹、Swap 条�
 
 ## 5. 备份与恢复演练
 
+备份放在项目外的 `E:\个人网站\chainscope-backups`。截至 2026-10-23 只保留一份（区块 128301272、迁移 0008），可恢复范围和之后需要补采的部分见 [数据说明](data.md) 的“数据库备份现状”。新建或删除备份后同步更新那一节。
+
 ```powershell
 mysqldump --single-transaction --routines --databases chainscope > backup\chainscope-YYYYMMDD.sql
 mysql -e "CREATE DATABASE chainscope_restore"
