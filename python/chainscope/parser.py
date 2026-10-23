@@ -25,7 +25,8 @@ def quantity(value, label: str, maximum: int = UINT256_MAX) -> int:
     return number
 
 
-def parse_transfer(raw: dict, token: str, start: int, end: int, block: dict) -> dict:
+def transfer_identity(raw: dict, token: str, start: int, end: int) -> dict:
+    """Fields Alchemy Transfers carry by itself; no block header is needed."""
     if not isinstance(raw, dict) or raw.get("category") != "erc20":
         raise ChainScopeError("Transfers 返回了非 ERC-20 记录")
     contract = raw.get("rawContract")
@@ -44,6 +45,19 @@ def parse_transfer(raw: dict, token: str, start: int, end: int, block: dict) -> 
     )
     if not match or int(match[1]) > 2**32 - 1:
         raise ChainScopeError("uniqueId 缺少有效日志索引")
+    return {
+        "block_number": number,
+        "tx_hash": tx_hash,
+        "log_index": int(match[1]),
+        "from_address": fixed_hex(raw.get("from"), ADDRESS, "from_address"),
+        "to_address": fixed_hex(raw.get("to"), ADDRESS, "to_address"),
+        "amount": quantity(contract.get("value"), "amount_raw"),
+    }
+
+
+def parse_transfer(raw: dict, token: str, start: int, end: int, block: dict) -> dict:
+    identity = transfer_identity(raw, token, start, end)
+    number = identity["block_number"]
     if quantity(block.get("number"), "block.number") != number:
         raise ChainScopeError("区块头与转账区块不一致")
     timestamp = datetime.fromtimestamp(
@@ -63,18 +77,18 @@ def parse_transfer(raw: dict, token: str, start: int, end: int, block: dict) -> 
             raise ChainScopeError("Transfers 时间戳格式错误") from None
         if supplied.tzinfo is None or supplied != timestamp:
             raise ChainScopeError("Transfers 时间戳与区块头不一致")
-    decimals = contract.get("decimal")
+    decimals = raw["rawContract"].get("decimal")
     return {
         "chain_id": 56,
         "token_address": token,
         "block_number": number,
         "block_hash": fixed_hex(block.get("hash"), HASH, "block_hash"),
         "block_time_utc": timestamp.replace(tzinfo=None),
-        "tx_hash": tx_hash,
-        "log_index": int(match[1]),
-        "from_address": fixed_hex(raw.get("from"), ADDRESS, "from_address"),
-        "to_address": fixed_hex(raw.get("to"), ADDRESS, "to_address"),
-        "amount_raw": str(quantity(contract.get("value"), "amount_raw")),
+        "tx_hash": identity["tx_hash"],
+        "log_index": identity["log_index"],
+        "from_address": identity["from_address"],
+        "to_address": identity["to_address"],
+        "amount_raw": str(identity["amount"]),
         "token_decimals": None
         if decimals is None
         else quantity(decimals, "decimals", 255),

@@ -22,6 +22,11 @@ class Settings:
     mysql_user: str = field(repr=False)
     mysql_password: str = field(repr=False)
     mysql_database: str
+    # Optional CoinGecko demo key; the public endpoint works without one.
+    coingecko_key: str = field(default="", repr=False)
+    # Optional SQD Portal key (Testing or paid plan) and Portal address.
+    sqd_api_key: str = field(default="", repr=False)
+    sqd_portal_url: str = ""
 
     def require_rpc(self) -> str:
         parts = urlsplit(self.rpc_url)
@@ -61,4 +66,7 @@ def load_settings() -> Settings:
         values.get("MYSQL_USER") or "",
         values.get("MYSQL_PASSWORD") or "",
         database,
+        values.get("COINGECKO_API_KEY") or "",
+        values.get("SQD_API_KEY") or "",
+        values.get("SQD_PORTAL_URL") or "",
     )

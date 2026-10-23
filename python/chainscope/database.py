@@ -4,12 +4,41 @@ from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.migration import MigrationContext
 from sqlalchemy.exc import SQLAlchemyError
 
+from .agent_models import AGENT_TABLES
 from .config import ROOT, Settings
 from .errors import ChainScopeError
-from .models import batch_events, batches, transfers
+from .models import batch_events, batches, metadata, transfers
+
+SCHEMA_REVISION = "0009"
+SCHEMA_TABLES = (
+    "collection_batches",
+    "transfer_events",
+    "batch_events",
+    "scan_jobs",
+    "coverage_windows",
+    "window_events",
+    "transfer_ingestion",
+    "pending_transfers",
+    "pool_discovery_progress",
+    "supplement_jobs",
+    "swap_windows",
+    "block_headers",
+    "window_diffs",
+    "dex_pools",
+    "swap_events",
+    "address_balances",
+    "address_info",
+    "address_labels",
+    "market_snapshots",
+    "pool_snapshots",
+    "pool_ohlcv",
+    "alembic_version",
+)
 
 
 def engine_for(settings: Settings, *, server_only=False):
@@ -31,7 +60,28 @@ def database_error(exc: SQLAlchemyError) -> ChainScopeError:
     )
 
 
-def check_database(engine):
+def schema_differences(connection, *, include_agent=True) -> list[str]:
+    """Columns, indexes and constraints that differ from models.py."""
+    context = MigrationContext.configure(
+        connection, opts={"compare_type": True, "compare_server_default": False}
+    )
+    expected = metadata
+    if not include_agent:
+        expected = sa.MetaData()
+        for name, table in metadata.tables.items():
+            if name not in AGENT_TABLES:
+                table.to_metadata(expected)
+    diffs = compare_metadata(context, expected)
+    lines = []
+    for diff in diffs:
+        item = diff[0] if isinstance(diff, list) else diff
+        if item[0] == "remove_table" and item[1].name == "alembic_version":
+            continue
+        lines.append(" ".join(str(part) for part in item[:3])[:200])
+    return lines
+
+
+def check_database(engine, *, full: bool = False):
     with engine.connect() as connection:
         version = connection.scalar(sa.text("SELECT VERSION()"))
         tables = sa.inspect(connection).get_table_names()
@@ -40,20 +90,25 @@ def check_database(engine):
             if "alembic_version" in tables
             else None
         )
-    return {
-        "mysql_version": version,
-        "migration_revision": revision,
-        "schema_ready": revision == "0002"
-        and all(
-            t in tables
-            for t in (
-                "collection_batches",
-                "transfer_events",
-                "batch_events",
-                "alembic_version",
+        # Core collection remains usable before the optional agent upgrade.
+        ready = revision in ("0008", SCHEMA_REVISION) and all(
+            t in tables for t in SCHEMA_TABLES
+        )
+        agent_ready = revision == SCHEMA_REVISION and all(
+            t in tables for t in AGENT_TABLES
+        )
+        result = {
+            "mysql_version": version,
+            "migration_revision": revision,
+            "schema_ready": ready,
+            "agent_schema_ready": agent_ready,
+        }
+        if full and ready:
+            result["schema_differences"] = schema_differences(
+                connection, include_agent=revision == SCHEMA_REVISION
             )
-        ),
-    }
+            result["schema_ready"] = not result["schema_differences"]
+    return result
 
 
 def initialize(settings: Settings) -> dict:
@@ -96,7 +151,9 @@ def utcnow():
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def start_batch(engine, batch_id, token, start, end, directory):
+def start_batch(
+    engine, batch_id, token, start, end, directory, *, provider="alchemy", job_id=None
+):
     with engine.begin() as connection:
         connection.execute(
             batches.insert().values(
@@ -105,10 +162,11 @@ def start_batch(engine, batch_id, token, start, end, directory):
                 token_address=token,
                 start_block=start,
                 end_block=end,
-                provider="alchemy",
+                provider=provider,
                 status="running",
                 started_at_utc=utcnow(),
                 raw_directory=str(directory) if directory is not None else None,
+                job_id=job_id,
             )
         )
 

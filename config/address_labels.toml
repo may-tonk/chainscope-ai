@@ -1,0 +1,48 @@
+# 地址标签。每个 [[label]] 一条，导入：python -m chainscope labels-import
+# category: cex / dex / team / burn / contract / bridge / other
+# source 必须写明出处（网址、截图日期等）；verified 只有你本人核实后才改为 true。
+# 交易所地址请从 BscScan 公开标签或交易所公告抄录，并注明日期；不要凭印象填写。
+
+[[label]]
+address = "0x000000000000000000000000000000000000dead"
+label = "销毁地址（dead）"
+category = "burn"
+source = "约定俗成的销毁地址，无私钥"
+verified = false
+
+[[label]]
+address = "0x10ed43c718714eb63d5aa57b78b54704e256024e"
+label = "PancakeSwap V2 Router"
+category = "dex"
+source = "PancakeSwap 开发者文档（待人工核对）"
+verified = false
+
+# 2026-10-23 pools discover 新发现的 BEM 池子；配对代币由链上 token0/token1、symbol() 查得
+[[label]]
+address = "0x818b63ea136f9b9a0e72e20fb382e2e2b9e370d9"
+label = "PancakeSwap V3 BEM/TapeRobot 池（1%）"
+category = "dex"
+source = "dex_pools 自动发现＋链上 token0/token1、symbol() 查询，2026-10-23；已启用采集"
+verified = false
+
+[[label]]
+address = "0xe13678e66f366890f16519df71985ec24921253c"
+label = "PancakeSwap V2 BEM/TAPEFLAP 池（空池）"
+category = "dex"
+source = "dex_pools 自动发现＋链上 token0/token1、symbol() 查询，2026-10-23；截至区块 129131520 无 BEM 进出，未启用"
+verified = false
+
+[[label]]
+address = "0xed3da4a18eaf8e82ae5ba4ab3896e5a1ab1a6805"
+label = "PancakeSwap V2 BEM/结晶行动 池（空池）"
+category = "dex"
+source = "dex_pools 自动发现＋链上 token0/token1、symbol() 查询，2026-10-23；截至区块 129131520 无 BEM 进出，未启用"
+verified = false
+
+# 示例：交易所热钱包（请替换为核实过的地址后取消注释）
+# [[label]]
+# address = "0x..."
+# label = "某交易所热钱包"
+# category = "cex"
+# source = "BscScan 公开标签，2026-10-15 查看"
+# verified = false
