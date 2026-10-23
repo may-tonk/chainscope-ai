@@ -6,11 +6,19 @@ import httpx
 import sqlalchemy as sa
 from sqlalchemy.dialects.mysql import insert as upsert
 
-from .errors import ChainScopeError, EventConflict, ReconcileMismatch
+from .errors import (
+    ChainScopeError,
+    EventConflict,
+    HeadersUnavailable,
+    ReconcileMismatch,
+)
 from .models import block_headers, transfers
 from .parser import HASH, fixed_hex, quantity
 from .sqd import BLOCK_FIELDS
 from .validator import TRANSFER_TOPIC
+
+# Requests kept back for the receipt samples and checks after the headers.
+HEADER_RESERVE = 10
 
 
 def header_row(number, block_hash, stamp):
@@ -102,11 +110,25 @@ def confirm_transfer_times(staged, headers, rpc, stop):
     return evidence
 
 
-def complete_headers(engine, job, window, staged, portal, rpc, stop):
+def complete_headers(
+    engine,
+    job,
+    window,
+    staged,
+    portal,
+    rpc,
+    stop,
+    *,
+    notify=lambda _: None,
+    allowance=lambda: None,
+):
     """SQD returns only headers; RPC fills missing headers if SQD is unavailable.
 
     No Transfer body is requested, counted or compared. Each block is cached
     durably, so stopping during metadata work never requires redoing the pages.
+    The RPC fallback costs one request per block: when `allowance()` (requests
+    left, None = unlimited) cannot cover it, stop with the reason instead of
+    spending the budget.
     """
     needed = {r["block_number"] for r in staged}
     if not needed:
@@ -139,6 +161,7 @@ def complete_headers(engine, job, window, staged, portal, rpc, stop):
         for row in old:
             if row["block_number"] not in found:
                 found[row["block_number"]] = dict(row, chain_id=56)
+    sqd_problem = None
     if needed - found.keys() and not stop():
         query = {
             "type": "evm",
@@ -167,10 +190,32 @@ def complete_headers(engine, job, window, staged, portal, rpc, stop):
                 raise
             # Metadata availability is not proof that a Transfer is absent.
             # Fall back to the primary node, with the same durable cache.
+            sqd_problem = (
+                str(exc) if isinstance(exc, ChainScopeError) else type(exc).__name__
+            )
         finally:
             blocks.close()
             save_headers(engine, buffered)
-    for number in sorted(needed - found.keys()):
+    missing = sorted(needed - found.keys())
+    if missing and not stop():
+        reason = sqd_problem or "SQD 未返回这些区块头"
+        notify(
+            {
+                "block_headers": "sqd_unavailable",
+                "window": [first, last],
+                "missing_blocks": len(missing),
+                "reason": reason,
+            }
+        )
+        left = allowance()
+        if left is not None and len(missing) + HEADER_RESERVE > left:
+            raise HeadersUnavailable(
+                f"区块头缺 {len(missing)} 个（{reason}）；改用主节点需要逐块请求，"
+                f"剩余请求预算 {left} 次不够，已暂停，未消耗这些请求。"
+                "已取得的区块头已保存，稍后续采会接着补"
+            )
+        notify({"block_headers": "rpc_fallback", "blocks": len(missing)})
+    for number in missing:
         if stop():
             return None
         h = rpc.call("eth_getBlockByNumber", [hex(number), False])

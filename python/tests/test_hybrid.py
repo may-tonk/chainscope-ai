@@ -17,13 +17,16 @@ from chainscope.database import utcnow
 from chainscope.errors import (
     ChainScopeError,
     EventConflict,
+    HeadersUnavailable,
     ReconcileMismatch,
     SourceUnavailable,
 )
+from chainscope.headers import complete_headers
 from chainscope.holders import top_holders
 from chainscope.hybrid import sync_hybrid
 from chainscope.jobs import job_status, load_job, plan_windows, verify_job
 from chainscope.models import (
+    block_headers,
     ingestion,
     pending_transfers,
     transfers,
@@ -244,6 +247,39 @@ def test_sqd_failure_does_not_block_primary_admission(mysql_engine):
     assert result["pending_events_saved"] == 0
     assert not result["coverage_complete"] and count(e, transfers) == 4
     assert result["transfers_complete"] and not result["swaps_complete"]
+
+
+@requires_mysql
+def test_header_fallback_pauses_with_reason_when_budget_cannot_cover_it(mysql_engine):
+    e = mysql_engine
+    chain = Chain(19, {11: 2})
+    chain.fail_from = 10  # SQD cannot serve the window's headers.
+    rpc = Paged(chain).client()
+    notes = []
+
+    def headers(allowance):
+        return complete_headers(
+            e,
+            {"token_address": TOKEN},
+            {"start_block": 10, "end_block": 14},
+            [{"block_number": 11}],
+            chain.portal(),
+            rpc,
+            lambda: False,
+            notify=notes.append,
+            allowance=allowance,
+        )
+
+    with pytest.raises(HeadersUnavailable, match="剩余请求预算 5 次不够"):
+        headers(lambda: 5)
+    # The reason is reported and no per-block request was spent.
+    assert notes[0]["block_headers"] == "sqd_unavailable"
+    assert "HTTP 400" in notes[0]["reason"] and notes[0]["missing_blocks"] == 1
+    assert rpc.requests == 0 and count(e, block_headers) == 0
+    # With enough budget the primary node fills the gap and the header is kept.
+    assert set(headers(lambda: None)) == {11}
+    assert notes[-1] == {"block_headers": "rpc_fallback", "blocks": 1}
+    assert rpc.requests == 1 and count(e, block_headers) == 1
 
 
 @requires_mysql

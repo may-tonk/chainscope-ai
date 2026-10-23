@@ -1340,8 +1340,16 @@ def test_p2_11_job_by_time_converts_once_and_resumes(mysql_engine):
         make("late", token=addr(0xE2), to_time="2999-01-01")
     with pytest.raises(ChainScopeError, match="已存在"):
         make("bem", from_time=at(20))
-    # The job keeps block numbers: syncing twice continues, never restarts.
+    # New jobs name the Alchemy primary; the legacy SQD runner refuses them.
+    assert made["source"] == "alchemy"
     chain = RichChain(100, {21: [(A, B, 1)], 31: [(A, B, 2)]})
+    with pytest.raises(ChainScopeError, match="旧 SQD 主采路径"):
+        run(engine, chain)
+    with engine.begin() as connection:
+        connection.execute(
+            jobs.update().where(jobs.c.job_id == "bem").values(source="sqd")
+        )
+    # The job keeps block numbers: syncing twice continues, never restarts.
     first = run(engine, chain)
     assert first["windows_done"] == 2 and through(engine) == 29
     assert run(engine, chain)["windows_done"] == 0

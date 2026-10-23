@@ -96,6 +96,8 @@ class Backend:
         self.engine, self.settings = engine, settings
         self.rpc_factory = rpc_factory or (lambda: RpcClient(settings.require_rpc()))
         self.validation_requests = 0
+        # Set by the worker: one JSON line per collection event, kept per run.
+        self.log_path = None
 
     def inspect(self, token):
         # A single repeatable-read snapshot: concurrent window commits do not mix watermarks.
@@ -438,7 +440,7 @@ class Backend:
                 self.engine,
                 plan.job.job_id,
                 plan.token.address,
-                source="sqd",
+                source="alchemy",
                 start_block=plan.job.start_block,
                 deploy_block=plan.job.deploy_block,
                 window_size=plan.job.window_size,
@@ -472,5 +474,6 @@ class Backend:
                     - self.validation_requests,
                 ),
                 notify=notify,
+                log_path=self.log_path,
                 stop_requested=stop,
             )

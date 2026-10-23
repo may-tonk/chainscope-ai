@@ -9,6 +9,14 @@ class SourceUnavailable(ChainScopeError):
     """An exhausted retry/quota/availability condition; not a data mismatch."""
 
 
+class SourceOverloaded(SourceUnavailable):
+    """A provider kept answering 'overloaded' for longer than we wait for it."""
+
+
+class HeadersUnavailable(SourceUnavailable):
+    """Block headers are missing and the remaining budget cannot fetch them."""
+
+
 class DataMismatch(ChainScopeError):
     """Collected data disagrees with stored data or a second source.
 

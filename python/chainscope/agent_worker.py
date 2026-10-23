@@ -183,21 +183,36 @@ def execute_worker(store, backend, run_id, ticket, *, heartbeat_interval=5):
                 reason = summary.get("stopped") or "incomplete"
                 data.last_error = Fault(
                     code=str(reason).upper(),
-                    message="本次执行已暂停，固定目标仍未全部完成",
+                    message=summary.get("headers_error")
+                    or summary.get("supplement_error")
+                    or "本次执行已暂停，固定目标仍未全部完成",
                     recovery="resume_same_target",
                     related_run_id=run_id,
                 )
             before = data.run_counters
+
+            def total(previous, value):
+                # None after the first attempt means an earlier attempt failed
+                # uncounted; adding to zero would understate the run's total.
+                if previous is None and data.attempt_count > 1:
+                    return None
+                return (previous or 0) + value
+
             data.run_counters = Counters(
-                inserted_transfers=(before.inserted_transfers or 0)
-                + summary.get("inserted", 0),
-                transfer_windows=(before.transfer_windows or 0)
-                + summary.get("windows_done", 0),
-                swap_windows=(before.swap_windows or 0)
-                + summary.get("swap_windows_done", 0),
+                inserted_transfers=total(
+                    before.inserted_transfers, summary.get("inserted", 0)
+                ),
+                transfer_windows=total(
+                    before.transfer_windows, summary.get("windows_done", 0)
+                ),
+                swap_windows=total(
+                    before.swap_windows, summary.get("swap_windows_done", 0)
+                ),
                 inserted_swaps=None,  # Existing collector doesn't attribute exact inserted Swap rows per run.
             )
     except Exception as exc:  # noqa: BLE001 -- detached process boundary; never print provider/SQL exception text.
+        # The class name alone is safe and tells the run log what stopped it.
+        print(f"worker stopped by {type(exc).__name__}", flush=True)
         with data_lock:
             update_usage()
             if isinstance(exc, (DataMismatch, AgentError)):
@@ -245,12 +260,17 @@ def main():
     parser.add_argument("--run", required=True)
     parser.add_argument("--ticket", required=True)
     args = parser.parse_args()
+    from .agent_contracts import RunInput
+
+    RunInput(run_id=args.run)  # A UUID, so it is safe inside a file name.
     settings = load_settings()
     engine = engine_for(settings)
     try:
         store = Store(engine)
         store.require_ready()
-        execute_worker(store, Backend(engine, settings), args.run, args.ticket)
+        backend = Backend(engine, settings)
+        backend.log_path = ROOT / "logs" / f"agent-{args.run}.jsonl"
+        execute_worker(store, backend, args.run, args.ticket)
     except (SQLAlchemyError, AgentError, ChainScopeError, OSError):
         print("后台执行记录未能确认；请查询原运行状态，不重复启动。", flush=True)
         return 1

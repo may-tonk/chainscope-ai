@@ -12,7 +12,13 @@ from sqlalchemy.dialects.mysql import insert as upsert
 from .collector import transfer_identities
 from .database import fail_batch, start_batch, utcnow
 from .dex import FACTORIES, discover_pools, load_pools
-from .errors import ChainScopeError, DataMismatch, ReconcileMismatch, SourceUnavailable
+from .errors import (
+    ChainScopeError,
+    DataMismatch,
+    HeadersUnavailable,
+    ReconcileMismatch,
+    SourceUnavailable,
+)
 from .holders import refresh_balances
 from .ingestion import (
     checkpoint,
@@ -181,7 +187,18 @@ def next_verification(engine, job_id, head):
 
 
 def promote(
-    engine, job, window, portal, rpc, pools, head, limit, hard_limit, stop=lambda: False
+    engine,
+    job,
+    window,
+    portal,
+    rpc,
+    pools,
+    head,
+    limit,
+    hard_limit,
+    stop=lambda: False,
+    notify=lambda _: None,
+    allowance=lambda: None,
 ):
     """Admit one complete primary window using local checks, not a second download."""
     from .headers import complete_headers, confirm_transfer_times
@@ -201,7 +218,17 @@ def promote(
         if diffs:
             raise ReconcileMismatch("备用来源转账与恢复后的主来源不一致", diffs[:1000])
         policy = "fallback_match"
-    headers = complete_headers(engine, job, window, staged, portal, rpc, stop)
+    headers = complete_headers(
+        engine,
+        job,
+        window,
+        staged,
+        portal,
+        rpc,
+        stop,
+        notify=notify,
+        allowance=allowance,
+    )
     if headers is None:
         return None
     time_confirmations = confirm_transfer_times(staged, headers, rpc, stop)
@@ -363,6 +390,11 @@ def sync_hybrid(
                 return "stop_requested"
             return budget.exhausted(portal, rpc)
 
+        def requests_left():
+            if budget.requests is None:
+                return None
+            return budget.requests - portal.stats["requests"] - rpc.requests
+
         def fetch(window):
             nonlocal primary_available
             if primary_available:
@@ -449,6 +481,8 @@ def sync_hybrid(
                         event_limit,
                         block_hard_limit,
                         stop=exhausted,
+                        notify=log,
+                        allowance=requests_left,
                     )
                     if result is None:
                         break
@@ -483,6 +517,11 @@ def sync_hybrid(
                     }
                 )
                 after = window["start_block"]
+            except HeadersUnavailable as exc:
+                summary["stopped"] = "block_headers_unavailable"
+                summary["headers_error"] = str(exc)
+                log({"block_headers": "paused", "reason": str(exc)})
+                break
             except SourceUnavailable:
                 summary["stopped"] = "awaiting_primary_admission"
                 break
