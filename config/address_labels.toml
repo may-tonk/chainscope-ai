@@ -17,6 +17,28 @@ category = "dex"
 source = "PancakeSwap 开发者文档（待人工核对）"
 verified = false
 
+# 2026-10-23 pools discover 新发现的 BEM 池子；配对代币由链上 token0/token1、symbol() 查得
+[[label]]
+address = "0x818b63ea136f9b9a0e72e20fb382e2e2b9e370d9"
+label = "PancakeSwap V3 BEM/TapeRobot 池（1%）"
+category = "dex"
+source = "dex_pools 自动发现＋链上 token0/token1、symbol() 查询，2026-10-23；已启用采集"
+verified = false
+
+[[label]]
+address = "0xe13678e66f366890f16519df71985ec24921253c"
+label = "PancakeSwap V2 BEM/TAPEFLAP 池（空池）"
+category = "dex"
+source = "dex_pools 自动发现＋链上 token0/token1、symbol() 查询，2026-10-23；截至区块 129131520 无 BEM 进出，未启用"
+verified = false
+
+[[label]]
+address = "0xed3da4a18eaf8e82ae5ba4ab3896e5a1ab1a6805"
+label = "PancakeSwap V2 BEM/结晶行动 池（空池）"
+category = "dex"
+source = "dex_pools 自动发现＋链上 token0/token1、symbol() 查询，2026-10-23；截至区块 129131520 无 BEM 进出，未启用"
+verified = false
+
 # 示例：交易所热钱包（请替换为核实过的地址后取消注释）
 # [[label]]
 # address = "0x..."
