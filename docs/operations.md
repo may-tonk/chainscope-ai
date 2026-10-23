@@ -52,6 +52,16 @@ cs labels-import                # 导入 config/address_labels.toml
 
 最好在第一次 `sync` 之前执行 `pools discover`，这样回填只做一遍。拆分进度后，启用新池子只重做相关 Swap 窗口，保留正式 Transfer 和它的连续进度。旧 SQD 主采任务仍沿用原来的合并窗口规则。
 
+BEM 池子处理记录：
+
+| 日期 | 池子 | 配对代币 | 决定与依据 |
+| --- | --- | --- | --- |
+| 2026-10-23 | `0x818b63ea136f9b9a0e72e20fb382e2e2b9e370d9`（PancakeSwap V3，1%） | TapeRobot | **已启用**。截至区块 129131520 有 2139 笔 BEM 进出、持有约 801 BEM。启用时重置 5 个 Swap 窗口（从 128897797 起），Swap 进度回到 128897796，正式 Transfer 不变；下一次采集补回。成交另一侧是 TapeRobot，没有美元价格 |
+| 2026-10-23 | `0xe13678e66f366890f16519df71985ec24921253c`（PancakeSwap V2） | TAPEFLAP | 保持停用：截至区块 129131520 没有 BEM 进出（空池） |
+| 2026-10-23 | `0xed3da4a18eaf8e82ae5ba4ab3896e5a1ab1a6805`（PancakeSwap V2） | 结晶行动 | 保持停用：截至区块 129131520 没有 BEM 进出（空池） |
+
+三个池子已写入 `config/address_labels.toml`，均为未核实标签。配对代币是否为项目官方代币未经核实；停用的池子以后有交易时，下次 `pools discover` 后重新评估。
+
 `pools discover` 默认从部署区块扫到最终确认高度，按段进行（`--chunk-blocks`，默认 100 万个区块，约 9 天）。每段完成就保存找到的池子，并在终端打印进度。中途失败时，报错会给出 `--from-block`，从那里继续即可。也可以先用 `--to-block` 只扫部署后的前几段。
 
 ## 2. 日常运行
