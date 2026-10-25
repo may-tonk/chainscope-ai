@@ -37,6 +37,8 @@ analysis = [
 ]
 api = [
     "fastapi>=0.115,<1",
+    "psycopg[binary]>=3.2,<4",
+    "pwdlib[argon2]>=0.2,<1",
     "uvicorn[standard]>=0.34,<1",
 ]
 dev = [
@@ -76,4 +78,4 @@ package-dir = {"" = "python"}
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["chainscope", "chainscope.*"]
+include = ["chainscope", "chainscope.*", "webapp", "webapp.*"]

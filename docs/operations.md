@@ -181,3 +181,37 @@ foreach ($point in "after_fetch", "before_done", "before_commit", "after_commit"
 | 61 | 全量回填 | 从部署区块 sync 到 caught_up，记录 elapsed_seconds 和 usage | |
 | 63 | 强退恢复 | 第 6 节 | |
 | 64 | 长时间停机 | 停 1 天后再运行 sync，确认自动补齐 | |
+
+## 8. 网站账户库（PostgreSQL，开发阶段）
+
+账户库在 VMware Linux 虚拟机 `192.168.229.10:5432`，只接受来自 Windows VMware 网卡的 TLS 连接（`verify-full`）。开发前启动虚拟机，并确认 PostgreSQL 在运行。
+
+1. 按 `.env.example` 在 `.env` 填写 `WEBAPP_DB_*` 和 `WEBAPP_TEST_DB_*`。运行网站后端前，还要用 `python python/tools/generate_webapp_keys.py` 生成 4 把 `AUTH_*_KEY` 并粘贴进 `.env`。自动化测试使用临时密钥，不需要这一步。`WEBAPP_DB_SSLROOTCERT` 填 CA 证书路径 `D:\Linux2\certificates\chainscope-postgresql-ca.crt`。密码只写在 `.env`。
+2. 运行只读连接检查，全部 `"ok": true` 才继续：
+
+   ```powershell
+   .\.venv\Scripts\python.exe python/tools/check_webapp_db.py
+   ```
+
+   它检查四个账号能否用 TLS 连上各自的库、运行账号不能建表、迁移账号不是超级管理员，并确认未加密连接被拒绝、开发运行账号连不上测试库。
+3. 先在测试库验证，再升级开发库：
+
+   ```powershell
+   $env:CHAINSCOPE_TEST_POSTGRES='1'
+   .\.venv\Scripts\python.exe -m pytest -q python/tests/webapp/test_web_migrations.py
+   Remove-Item Env:/CHAINSCOPE_TEST_POSTGRES
+   .\.venv\Scripts\python.exe -m alembic -n webapp upgrade head
+   ```
+
+   测试结束后，测试库会回退为空。测试库里如果有不属于账户迁移的表，测试会停下且不改动。开发库升级后，在 Navicat 中应看到 5 张表和 `alembic_version`（版本 `0001`）。
+
+启动网站后端（开发环境，只监听本机）：
+
+```powershell
+.\.venv\Scripts\python.exe python/tools/run_webapp.py
+```
+
+需要 `.env` 里已有 4 把 `AUTH_*_KEY`。启动后打开 `http://127.0.0.1:8000/docs`，可以查看并试用接口。开发模式下，注册验证码打印在这个窗口里。按 Ctrl+C 停止。
+
+服务器证书 2027-11-26 到期，到期前在虚拟机换证书。虚拟机 IP 或 Windows VMware 网卡 IP 变化时，先同步修改数据库端的访问控制和证书。
+

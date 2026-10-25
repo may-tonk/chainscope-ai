@@ -13,6 +13,9 @@
 | `python/tools` | 聊天入口、环境检查、测量和手动采集等辅助入口 |
 | `python/migration_env` | Alembic 执行入口 `env.py` |
 | `python/migrations` | 保持连续的迁移版本 `0001`～`0009` |
+| `python/webapp` | 网站后端（开发中），不导入采集代码，按职责分文件夹：`core`（配置、密钥、错误、邮箱格式、发信）、`db`（账户库连接与表定义）、`security`（密码、令牌、CSRF）、`services`（业务逻辑）、`api`（网页接口）。只允许 `api → services → security/db → core` 方向调用 |
+| `python/webapp/migrations` | 账户库（PostgreSQL）的 Alembic 入口 `env.py`，版本在 `versions/`；与 MySQL 迁移链、版本表分开，命令为 `alembic -n webapp` |
+| `python/tests/webapp` | 网站后端测试，文件名以 `test_web_` 开头 |
 | `config` | 代币服务列表、本地身份和地址标签 |
 | `docs` | 当前说明及注明日期的历史设计、学习和验证记录 |
 | `sql` | Navicat 查询及历史初始迁移 SQL 导出 |
