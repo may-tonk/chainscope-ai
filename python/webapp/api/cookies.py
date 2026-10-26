@@ -18,6 +18,7 @@ _ATTRIBUTES = {"path": "/", "secure": True, "httponly": True, "samesite": "lax"}
 
 
 def set_session_cookie(response, token: str, kind: str) -> None:
+    """把会话令牌写进 Cookie。有效期跟着会话类型走：匿名 2 小时，已登录 7 天。"""
     lifetime: timedelta = USER_ABSOLUTE if kind == "user" else ANONYMOUS_ABSOLUTE
     response.set_cookie(
         COOKIE_NAME, token, max_age=int(lifetime.total_seconds()), **_ATTRIBUTES

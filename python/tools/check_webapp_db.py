@@ -100,6 +100,7 @@ def expect_refused(label, profile, role, **connect_args) -> dict:
 
 
 def main(argv=None) -> int:
+    """命令行入口：逐个检查配置好的账号，打印 JSON 结果；全部通过时退出码为 0。"""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--profile", choices=(*PROFILES, "all"), default="all")
     args = parser.parse_args(argv)

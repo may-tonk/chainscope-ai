@@ -36,17 +36,21 @@ class ConsoleMailer:
         print(f"[开发模式邮件] 收件人 {to}：{text}", file=self.stream, flush=True)
 
     def send_registration_code(self, to: str, code: str) -> None:
+        """发注册验证码。"""
         self._print(to, f"注册验证码 {code}，5 分钟内有效")
 
     def send_already_registered(self, to: str) -> None:
+        """提醒邮箱主人：这个邮箱已经有账户（不含验证码）。"""
         self._print(to, "这个邮箱已经注册过账户，请直接登录（未生成验证码）")
 
     def send_password_reset_code(self, to: str, code: str) -> None:
+        """发重置密码验证码。"""
         self._print(
             to, f"重置密码验证码 {code}，5 分钟内有效；如果不是你本人操作，请忽略"
         )
 
     def send_password_changed(self, to: str) -> None:
+        """通知账户邮箱：密码刚被重置。"""
         self._print(
             to,
             "你的密码刚刚被重置，所有设备已退出登录；如果不是你本人操作，请立即重置密码",
@@ -54,6 +58,7 @@ class ConsoleMailer:
 
 
 def mailer_for(config: AppConfig):
+    """按配置创建发信器；以后增加 SMTP 时在这里加一个分支。"""
     if config.mail_mode == "console":
         return ConsoleMailer()
     raise ConfigError(f"不支持的发信方式：{config.mail_mode}")

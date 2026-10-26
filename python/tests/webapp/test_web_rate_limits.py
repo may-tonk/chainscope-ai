@@ -15,12 +15,14 @@ OWNER = "203.0.113.5"
 
 
 def fail(engine, keys, rule, *parts, times=1):
+    """记若干次（每次一个独立事务），模拟连续失败或连续发送。"""
     for _ in range(times):
         with engine.begin() as connection:
             limits.count(connection, keys, rule, *parts)
 
 
 def blocked(engine, keys, *checks) -> int | None:
+    """检查是否在冷却中：是就返回要等的秒数，否则返回 None。"""
     with engine.begin() as connection:
         try:
             limits.ensure_allowed(connection, keys, *checks)

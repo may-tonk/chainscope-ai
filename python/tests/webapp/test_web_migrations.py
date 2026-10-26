@@ -205,6 +205,7 @@ def test_constraints_protect_account_rules(test_db):
     )
 
     def violates(statement, params) -> str:
+        """执行一条语句并断言它违反约束，返回 PostgreSQL 的错误编号。"""
         with runtime.connect() as connection:
             with pytest.raises(DBAPIError) as caught:
                 with connection.begin():

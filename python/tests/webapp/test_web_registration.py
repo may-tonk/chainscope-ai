@@ -32,11 +32,13 @@ class FakeMailer:
         self.fail = fail
 
     def send_registration_code(self, to, code):
+        """假发信：记下注册验证码；fail=True 时模拟发送失败。"""
         if self.fail:
             raise MailDeliveryFailed()
         self.codes[to] = code
 
     def send_already_registered(self, to):
+        """假发信：记下收到“已有账户”提醒的邮箱。"""
         if self.fail:
             raise MailDeliveryFailed()
         self.notices.append(to)
@@ -49,24 +51,28 @@ def flow(engine, keys):
 
 
 def start(engine, keys, mailer, email, flow, source=SOURCE):
+    """第 1 步的简写，返回请求编号。"""
     return registration.start(
         engine, keys, mailer, email, flow_session_id=flow, source=source
     ).challenge_id
 
 
 def verify(engine, keys, challenge_id, code, flow):
+    """第 2 步的简写，返回注册凭证。"""
     return registration.verify(
         engine, keys, challenge_id, code, flow_session_id=flow, source=SOURCE
     )
 
 
 def complete(engine, keys, token, flow, password=PASSWORD):
+    """第 3 步的简写，返回新账户的 user_id。"""
     return registration.complete(
         engine, keys, token, password, flow_session_id=flow, source=SOURCE
     )
 
 
 def wrong(code: str) -> str:
+    """生成一个肯定不对的验证码（正确值加 1）。"""
     return f"{(int(code) + 1) % 1_000_000:06d}"
 
 
@@ -226,6 +232,7 @@ def test_concurrent_completion_creates_exactly_one_account(engine, keys, flow):
     outcomes = []
 
     def run():
+        """并发测试里每个线程执行的内容：等到两个线程同时就绪再提交。"""
         barrier.wait()
         try:
             outcomes.append(complete(engine, keys, token, flow))
@@ -251,6 +258,7 @@ def test_concurrent_verification_issues_one_token(engine, keys, flow):
     outcomes = []
 
     def run():
+        """并发测试里每个线程执行的内容：等到两个线程同时就绪再提交。"""
         barrier.wait()
         try:
             outcomes.append(verify(engine, keys, challenge_id, code, flow))

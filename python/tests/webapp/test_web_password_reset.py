@@ -33,21 +33,26 @@ class FakeMailer:
         self.fail = fail
 
     def send_password_reset_code(self, to, code):
+        """假发信：记下重置验证码；fail=True 时模拟发送失败。"""
         if self.fail:
             raise MailDeliveryFailed()
         self.reset_codes[to] = code
 
     def send_password_changed(self, to):
+        """假发信：记下收到“密码已修改”通知的邮箱。"""
         self.changed.append(to)
 
     def send_registration_code(self, to, code):
+        """重置流程不应调用；被调用说明代码走错了流程。"""
         raise AssertionError("重置流程不应发送注册验证码")
 
     def send_already_registered(self, to):
+        """重置流程不应调用；被调用说明代码走错了流程。"""
         raise AssertionError("重置流程不应发送注册提醒")
 
 
 def make_user(engine, email=EMAIL, password=OLD, status="active"):
+    """直接在库里建一个账户（只为准备测试数据）。"""
     with engine.begin() as connection:
         return connection.scalar(
             users.insert()
@@ -65,6 +70,7 @@ def make_user(engine, email=EMAIL, password=OLD, status="active"):
 
 @pytest.fixture
 def flow(engine, keys):
+    """一个浏览器匿名会话，代表“正在重置密码的那个浏览器”。"""
     return session_service.start_anonymous(engine, keys).session_id
 
 
@@ -79,18 +85,21 @@ def start(engine, keys, flow, email=EMAIL, mailer=None):
 
 
 def verify(engine, keys, challenge_id, code, flow):
+    """第 2 步的简写。"""
     return password_reset.verify(
         engine, keys, challenge_id, code, flow_session_id=flow, source=SOURCE
     )
 
 
 def complete(engine, keys, token, flow, password=NEW):
+    """第 3 步的简写，默认设置新密码 NEW。"""
     return password_reset.complete(
         engine, keys, token, password, flow_session_id=flow, source=SOURCE
     )
 
 
 def reset(engine, keys, flow, mailer, email=EMAIL, password=NEW):
+    """完整走一遍重置三步，返回账户邮箱。"""
     started = start(engine, keys, flow, email, mailer)
     token = verify(
         engine, keys, started.challenge_id, mailer.reset_codes[started.email], flow
@@ -99,10 +108,12 @@ def reset(engine, keys, flow, mailer, email=EMAIL, password=NEW):
 
 
 def login(engine, keys, password, source=SOURCE):
+    """测试用的登录简写。"""
     return accounts.login(engine, keys, EMAIL, password, source=source)
 
 
 def clear_send_limits(engine):
+    """清掉发信相关的限速计数（保留验证码输错计数），模拟“过了一段时间”。"""
     with engine.begin() as connection:
         connection.execute(
             rate_limits.delete().where(rate_limits.c.purpose != "verify_email")
@@ -221,6 +232,7 @@ def test_concurrent_completion_succeeds_once(engine, keys, flow):
     outcomes = []
 
     def run():
+        """并发测试里每个线程执行的内容：等到两个线程同时就绪再提交。"""
         barrier.wait()
         try:
             complete(engine, keys, token, flow)

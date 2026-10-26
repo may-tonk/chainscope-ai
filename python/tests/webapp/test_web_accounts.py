@@ -36,10 +36,12 @@ def make_user(engine, email=EMAIL, password=PASSWORD, status="active"):
 
 
 def login(engine, keys, email=EMAIL, password=PASSWORD, source=OWNER):
+    """测试用的登录简写：默认用正确密码、从“用户自己的来源”登录。"""
     return accounts.login(engine, keys, email, password, source=source)
 
 
 def event_reasons(engine, event_type):
+    """读出某类审计事件的内部原因码，用来确认真实失败原因被记录了。"""
     with engine.begin() as connection:
         return connection.scalars(
             sa.select(events.c.reason).where(events.c.event_type == event_type)
@@ -167,6 +169,7 @@ def test_password_changed_during_login_does_not_create_a_session(
     real_verify = accounts.verify_password
 
     def verify_then_change(password, stored):
+        """替换掉真正的密码校验：先正常校验，然后马上模拟另一个请求改了密码。"""
         outcome = real_verify(password, stored)
         with engine.begin() as connection:  # 模拟并发的改密码请求
             connection.execute(
@@ -237,6 +240,7 @@ def test_last_seen_is_refreshed_only_after_a_while(engine, keys):
     session = login(engine, keys).session
 
     def last_seen():
+        """读出会话的最近活动时间。"""
         with engine.begin() as connection:
             return connection.scalar(sa.select(sessions.c.last_seen_at))
 

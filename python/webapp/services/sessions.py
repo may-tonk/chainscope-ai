@@ -57,10 +57,12 @@ class SessionInfo:
 
 
 def token_hash(keys: AuthKeys, token: str) -> bytes:
+    """登录令牌的指纹：数据库里只存这个，不存令牌原值。"""
     return fingerprint(keys.session, "session", token)
 
 
 def csrf_hash(keys: AuthKeys, csrf_token: str) -> bytes:
+    """CSRF 令牌的指纹：查验时把浏览器提交的令牌再算一次，和数据库里的比对。"""
     return fingerprint(keys.csrf, "csrf", csrf_token)
 
 

@@ -14,6 +14,7 @@ import uvicorn
 
 
 def main() -> None:
+    """用 uvicorn 启动 webapp.app:create_app（工厂模式），只监听本机。"""
     uvicorn.run(
         "webapp.app:create_app",
         factory=True,

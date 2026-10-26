@@ -28,19 +28,24 @@ class FakeMailer:
         self.changed = []
 
     def send_registration_code(self, to, code):
+        """假发信：把注册验证码记下来。"""
         self.codes[to] = code
 
     def send_already_registered(self, to):
+        """假发信：记下收到“已有账户”提醒的邮箱。"""
         self.notices.append(to)
 
     def send_password_reset_code(self, to, code):
+        """假发信：把重置验证码记下来。"""
         self.reset_codes[to] = code
 
     def send_password_changed(self, to):
+        """假发信：记下收到“密码已修改”通知的邮箱。"""
         self.changed.append(to)
 
 
 def dev_config(**changes) -> AppConfig:
+    """测试用的开发环境配置：只允许 https://testserver 这个来源和主机。"""
     values = {
         "environment": "development",
         "allowed_origins": (ORIGIN,),
@@ -52,11 +57,13 @@ def dev_config(**changes) -> AppConfig:
 
 @pytest.fixture
 def mailer():
+    """每个测试一个新的假发信器，验证码从它的“收件箱”里取。"""
     return FakeMailer()
 
 
 @pytest.fixture
 def app(engine, keys, mailer):
+    """用测试库、临时密钥和假发信器组装出的网站后端。"""
     return create_app(engine=engine, keys=keys, config=dev_config(), mailer=mailer)
 
 
@@ -68,17 +75,20 @@ def browser(app):
 
 
 def csrf(browser) -> str:
+    """模拟页面打开时取 CSRF 令牌（必要时会新建匿名会话并设置 Cookie）。"""
     response = browser.get("/api/auth/csrf")
     assert response.status_code == 200
     return response.json()["csrf_token"]
 
 
 def post(browser, path, body=None, token=None):
+    """发一个 POST 请求；传了 token 就放进 X-CSRF-Token 请求头。"""
     headers = {"X-CSRF-Token": token} if token else {}
     return browser.post(path, json=body or {}, headers=headers)
 
 
 def register(browser, mailer, email=EMAIL, password=PASSWORD):
+    """通过接口走完注册三步，每一步都确认返回成功。"""
     token = csrf(browser)
     started = post(browser, "/api/auth/registration/request", {"email": email}, token)
     assert started.status_code == 202, started.text
@@ -102,6 +112,7 @@ def register(browser, mailer, email=EMAIL, password=PASSWORD):
 
 
 def login(browser, email=EMAIL, password=PASSWORD):
+    """通过接口登录（先取 CSRF 令牌再提交）。"""
     response = post(
         browser,
         "/api/auth/login",

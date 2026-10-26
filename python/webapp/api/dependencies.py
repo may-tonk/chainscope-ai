@@ -39,10 +39,12 @@ class WebContext:
 
 
 def web_context(request: Request) -> WebContext:
+    """取出启动时创建的共用对象（数据库、密钥、配置、发信器）。"""
     return request.app.state.webapp
 
 
 def request_id(request: Request) -> str:
+    """本次请求的编号，由 app.py 的中间件在请求进来时生成，写进审计和错误响应。"""
     return request.state.request_id
 
 
@@ -74,6 +76,7 @@ def client_source(request: Request) -> str:
 
 
 def current_session(request: Request) -> SessionInfo | None:
+    """读取浏览器带来的会话 Cookie 并查验；没有或无效时返回 None（不报错，由调用方决定怎么处理）。"""
     context = web_context(request)
     return lookup(context.engine, context.keys, request.cookies.get(COOKIE_NAME))
 
@@ -92,18 +95,21 @@ def ensure_csrf(request: Request, session: SessionInfo | None) -> SessionInfo:
 def require_csrf(
     request: Request, session: SessionInfo | None = Depends(current_session)
 ) -> SessionInfo:
+    """修改操作的依赖：必须通过来源检查和 CSRF 令牌检查，否则返回 403。"""
     return ensure_csrf(request, session)
 
 
 def require_user(
     session: SessionInfo | None = Depends(current_session),
 ) -> SessionInfo:
+    """需要登录的只读接口的依赖：没有已登录会话时返回 401。"""
     if session is None or session.kind != "user":
         raise NotAuthenticated()
     return session
 
 
 def require_user_csrf(session: SessionInfo = Depends(require_csrf)) -> SessionInfo:
+    """需要登录的修改操作的依赖：先过 CSRF 检查，再确认是已登录会话。"""
     if session.kind != "user":
         raise NotAuthenticated()
     return session

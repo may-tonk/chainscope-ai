@@ -1,4 +1,4 @@
-"""ChainScope website backend: accounts, sessions and login (PostgreSQL).
+"""ChainScope 网站后端：账户、注册、登录、会话和重置密码（账户数据存在 PostgreSQL）。
 
-Kept apart from the collection package `chainscope`; neither imports the other.
+和采集代码 chainscope 包完全分开，两边互不引用。
 """

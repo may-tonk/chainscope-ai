@@ -56,6 +56,8 @@ def _code_hmac(keys: AuthKeys, challenge_id, email_key: str, code: str) -> bytes
 
 def flow_binding(keys: AuthKeys, flow_session_id) -> bytes:
     # 浏览器流程绑定：只有发起注册的那个匿名会话，才能继续完成后面两步。
+    """根据浏览器匿名会话编号算出“流程绑定值”，存进验证请求；之后每一步都要对得上，
+    别的浏览器拿到验证码或凭证也用不了。重置密码流程也复用它。"""
     return fingerprint(keys.session, "register-flow", str(flow_session_id))
 
 

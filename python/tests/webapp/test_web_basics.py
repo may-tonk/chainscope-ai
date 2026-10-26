@@ -18,11 +18,13 @@ from webapp.services.audit import mask_source
 
 
 def key_text(n=32) -> str:
+    """生成一段 base64url 文本形式的随机密钥（默认 32 字节）。"""
     return base64.urlsafe_b64encode(secrets.token_bytes(n)).decode().rstrip("=")
 
 
 @pytest.fixture
 def key_values():
+    """一组合格的 4 把密钥配置。"""
     return {name: key_text() for name in KEY_NAMES}
 
 
@@ -181,6 +183,7 @@ def test_concurrent_hashing_never_exceeds_the_slot_limit(monkeypatch):
     real = passwords.hasher.hash
 
     def tracked(value):
+        """包装真正的哈希函数：统计同一时刻有多少个哈希在算。"""
         nonlocal active, peak
         with lock:
             active += 1

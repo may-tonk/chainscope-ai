@@ -15,6 +15,7 @@ from webapp.core.keys import KEY_NAMES, MIN_KEY_BYTES
 
 
 def main() -> None:
+    """打印 4 行 `变量名=随机密钥`，每把都是 32 字节安全随机数。"""
     for name in KEY_NAMES:
         print(f"{name}={secrets.token_urlsafe(MIN_KEY_BYTES)}")
 

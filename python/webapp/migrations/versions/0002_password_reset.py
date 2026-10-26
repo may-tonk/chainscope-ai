@@ -19,6 +19,7 @@ depends_on = None
 
 
 def upgrade():
+    """升级：加 user_id 列和外键，放宽用途约束，加“重置请求必须有用户编号”的约束和索引。"""
     op.add_column(
         "auth_challenges",
         sa.Column(

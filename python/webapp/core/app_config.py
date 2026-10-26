@@ -39,6 +39,7 @@ class AppConfig:
 
     @property
     def is_production(self) -> bool:
+        """当前是否生产环境。"""
         return self.environment == "production"
 
     @property
@@ -66,6 +67,9 @@ def _origin(value: str) -> str:
 
 
 def load_app_config(values: dict | None = None) -> AppConfig:
+    """读取并检查运行配置。`values` 平时不传（读 .env 和环境变量），测试时传入字典。
+
+    任何不安全的组合（例如生产环境用控制台发信）都直接抛出 ConfigError，拒绝启动。"""
     if values is None:
         values = {**dotenv_values(ROOT / ".env", interpolate=False), **os.environ}
     environment = (values.get("WEBAPP_ENV") or "development").strip()

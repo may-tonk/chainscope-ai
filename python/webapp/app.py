@@ -114,6 +114,7 @@ def create_app(
 
     @app.middleware("http")
     async def request_id_and_headers(request: Request, call_next):
+        """每个请求都经过这里：先生成请求编号，处理完后在响应上加请求编号和安全响应头。"""
         request.state.request_id = uuid4().hex
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
@@ -126,6 +127,7 @@ def create_app(
 
     @app.exception_handler(WebappError)
     async def webapp_error(request: Request, exc: WebappError):
+        """把业务异常（WebappError 及其子类）转换成对应的 HTTP 状态码和统一错误格式。"""
         if isinstance(exc, PasswordRejected):
             return _error(request, 400, exc.code, str(exc))
         for kind, (status, code) in ERRORS.items():
@@ -142,6 +144,7 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError):
         # 只说哪些字段有问题，绝不回显输入值（输入里可能就是密码）。
+        """请求格式不对（缺字段、类型错、多了字段、太长）时返回 400，只列出字段名。"""
         fields = sorted(
             {".".join(str(p) for p in e["loc"][1:]) or "body" for e in exc.errors()}
         )
@@ -152,12 +155,14 @@ def create_app(
     @app.exception_handler(SQLAlchemyError)
     async def database_unavailable(request: Request, exc: SQLAlchemyError):
         # 账户库出问题时一律返回“暂时不可用”，不放行（验收 A10）；日志只记错误类型和编号。
+        """数据库出错时返回 503；日志只记录错误类型和 SQLSTATE 编号，不记录 SQL 内容。"""
         state = getattr(getattr(exc, "orig", None), "sqlstate", None) or "unknown"
         log.error("account database error %s (SQLSTATE %s)", type(exc).__name__, state)
         return _error(request, 503, "service_unavailable", "服务暂时不可用，请稍后再试")
 
     @app.exception_handler(Exception)
     async def unexpected(request: Request, exc: Exception):
+        """兜底：任何没预料到的错误都返回 500 和固定提示，不把内部细节暴露给浏览器。"""
         log.error("unexpected error %s", type(exc).__name__)
         return _error(request, 500, "internal_error", "服务器内部错误")
 
