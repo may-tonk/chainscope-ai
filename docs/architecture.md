@@ -13,6 +13,9 @@
 | `python/tools` | 聊天入口、环境检查、测量和手动采集等辅助入口 |
 | `python/migration_env` | Alembic 执行入口 `env.py` |
 | `python/migrations` | 保持连续的迁移版本 `0001`～`0009` |
+| `python/webapp` | 网站后端（开发中），不导入采集代码，按职责分文件夹：`core`（配置、密钥、错误、邮箱格式、发信）、`db`（账户库连接与表定义）、`security`（密码、令牌、CSRF）、`services`（业务逻辑）、`api`（网页接口）。只允许 `api → services → security/db → core` 方向调用 |
+| `python/webapp/migrations` | 账户库（PostgreSQL）的 Alembic 入口 `env.py`，版本在 `versions/`；与 MySQL 迁移链、版本表分开，命令为 `alembic -n webapp` |
+| `python/tests/webapp` | 网站后端测试，文件名以 `test_web_` 开头 |
 | `config` | 代币服务列表、本地身份和地址标签 |
 | `docs` | 当前说明及注明日期的历史设计、学习和验证记录 |
 | `sql` | Navicat 查询及历史初始迁移 SQL 导出 |
@@ -22,7 +25,7 @@
 | `logs` | CLI 或后台进程输出，不代替数据库进度 |
 | `.run` | PyCharm 共享运行配置 |
 | `.venv`、`*.egg-info` | 安装工具管理的环境和元信息，不是手写源码 |
-| `build`（若存在） | 构建或旧临时产物；清理前核对独有资料，不作为运行入口 |
+| `build`（若存在） | 构建或旧临时产物，不作为运行入口。2026-10-23 核对后已删除旧目录（安装元信息副本、旧目录结构占位、旧 IDE 配置、首次发布时的临时检出），均无独有资料；以后再生成时清理前同样先核对 |
 
 根目录保留环境、依赖、迁移和协作工具所需配置。环境、缓存、构建目录和安装元信息从 IDE 日常源码搜索中排除即可，不通过移动解释器整理目录。
 

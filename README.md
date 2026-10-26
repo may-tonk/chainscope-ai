@@ -185,6 +185,11 @@ $env:CHAINSCOPE_TEST_MYSQL='1'
 uv run --all-extras --locked python -m pytest -q
 Remove-Item Env:/CHAINSCOPE_TEST_MYSQL
 
+# 网站账户库测试：只使用 PostgreSQL 测试库 chainscope_app_test，结束后回退为空
+$env:CHAINSCOPE_TEST_POSTGRES='1'
+uv run --all-extras --locked python -m pytest -q python/tests/webapp/test_web_migrations.py
+Remove-Item Env:/CHAINSCOPE_TEST_POSTGRES
+
 # 观察网络、超时、限流、RPC 错误和空结果的可控模拟
 uv run --all-extras --locked python python/tools/demo_rpc_failures.py --scenario all
 ```
@@ -203,7 +208,7 @@ uv run --all-extras --locked python python/tools/demo_rpc_failures.py --scenario
 
 ## 项目结构
 
-人工维护目录最多嵌套一层，按文件类型组织：
+按文件类型组织；采集部分每个目录直接放文件，网站后端按职责再分文件夹：
 
 ```text
 python/
@@ -212,6 +217,13 @@ python/
   tools/            工具 Python 脚本
   migration_env/    Alembic 执行入口
   migrations/       迁移版本
+  webapp/           网站后端（开发中），按职责分文件夹：
+    core/           配置、密钥、错误、发信
+    db/             账户库连接与表定义
+    security/       密码、令牌、CSRF
+    services/       注册、登录、会话、限速、审计
+    api/            网页接口
+    migrations/     账户库（PostgreSQL）迁移，与 MySQL 迁移链分开
 sql/                SQL 查询与历史初始迁移导出
 samples/            固定 CSV 样本
 reports/            样本来源；运行报告留在本地

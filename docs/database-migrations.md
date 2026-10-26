@@ -38,3 +38,24 @@
 - `sql/migration-0001.sql` 是历史初始导出，不是当前完整建库入口。
 
 升级恢复点、结构核对和历史数据验证分别记录。测试使用随机临时库，不通过降级正式库做迁移实验，见 [MySQL 测试](mysql-tests.md)。
+
+## 网站账户库（PostgreSQL）
+
+账户库是另一套独立迁移，和上面的 MySQL `0001`～`0009` 没有关系：入口在 `python/webapp/migrations/env.py`，版本在 `python/webapp/migrations/versions`，使用 `alembic.ini` 的 `[webapp]` 一节，版本表在账户库自己的 `alembic_version` 中。
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -n webapp upgrade head                  # 开发库 chainscope_app
+.\.venv\Scripts\python.exe -m alembic -n webapp -x profile=test upgrade head  # 测试库 chainscope_app_test
+.\.venv\Scripts\python.exe -m alembic -n webapp upgrade head --sql            # 只输出 SQL 供审阅，不连接数据库
+```
+
+| 版本 | 内容 |
+| --- | --- |
+| `0001` | `app_users`、`auth_challenges`、`auth_sessions`、`auth_rate_limits`、`auth_events` |
+| `0002` | `auth_challenges` 增加用途 `password_reset` 和 `user_id` 列（账户删除时随之删除），并加约束：重置请求必须有 `user_id`、注册请求不能有。已有数据不变 |
+
+- 迁移只用对应的迁移账号（`chainscope_migrator`、`chainscope_test_migrator`）。迁移前程序向服务器确认账号、数据库、`public` 的 USAGE/CREATE 权限、非超级管理员和 TLS，任一不符就拒绝，不建表。
+- 运行账号的读写权限来自数据库端的默认权限设置，迁移脚本不写 `GRANT`。
+- 网站启动时不自动建表。
+- 回退会删除全部账户，只允许在测试库执行；开发库和以后的正式库不做回退实验。
+

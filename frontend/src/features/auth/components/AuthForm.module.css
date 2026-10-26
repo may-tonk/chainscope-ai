@@ -1,0 +1,100 @@
+/*
+ * 认证类页面（登录、注册、忘记密码）共用的排版：标题区、表单、底部链接。
+ * 几个页面用同一套样式，看起来是一个整体；以后要调整，只改这里。
+ */
+
+/* 各部分之间的间距比工作台紧凑一些，表单整体更小巧（2026-10-26 调整）。 */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-5);
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2);
+}
+
+/* 页面大标题用宋体类字体，与左侧大口号呼应（参考图）。字号 26px，与缩小后的表单比例协调。 */
+.title {
+  font-family: var(--cs-font-serif);
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.subtitle {
+  color: var(--cs-text-muted);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+}
+
+/* 每一步的小标题和说明（例如“输入验证码”“验证码已发送到 …”）。 */
+.stepIntro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-1);
+}
+
+.stepTitle {
+  font-size: var(--cs-text-lg);
+  font-weight: 600;
+}
+
+.stepText {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+  /* 很长的邮箱允许换行。 */
+  word-break: break-word;
+}
+
+.email {
+  color: var(--cs-text);
+  font-weight: 500;
+}
+
+/* 两个按钮并排：例如“重新发送验证码”和“修改邮箱”。 */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cs-space-2);
+}
+
+/* 看起来像链接的按钮（不跳转页面、只在当前页面操作）。 */
+.linkButton {
+  padding: var(--cs-space-1) 0;
+  border: none;
+  background: none;
+  color: var(--cs-green-700);
+  font-size: var(--cs-text-sm);
+  cursor: pointer;
+}
+
+.linkButton:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.linkButton:disabled {
+  color: var(--cs-text-faint);
+  cursor: not-allowed;
+}
+
+/* 底部的“还没有账号？创建账号”“已有账号？去登录”。 */
+.footer {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+  text-align: center;
+}
+
+/* 登录页“忘记密码？”等放在输入框右下方的链接。 */
+.inlineLink {
+  align-self: flex-end;
+  margin-top: calc(-1 * var(--cs-space-3));
+  font-size: var(--cs-text-sm);
+}

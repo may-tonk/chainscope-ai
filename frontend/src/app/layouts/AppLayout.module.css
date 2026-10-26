@@ -1,0 +1,292 @@
+/*
+ * 工作台外壳的样式。
+ * 宽屏（≥ 900px）：左侧栏固定显示；窄屏：左侧栏隐藏，从左边滑出。
+ */
+
+.shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ── 左侧栏 ── */
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-5);
+  flex-shrink: 0;
+  width: var(--cs-sidebar-width);
+  height: 100vh;
+  padding: var(--cs-space-6) var(--cs-space-4) var(--cs-space-4);
+  background: var(--cs-sidebar);
+  border-right: 1px solid var(--cs-border);
+  /* 导航很多时侧栏内部滚动，不影响右侧内容。 */
+  overflow-y: auto;
+}
+
+.sidebarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--cs-space-2);
+}
+
+.brand {
+  font-size: var(--cs-text-xl);
+  font-weight: 700;
+  color: var(--cs-green-700);
+  letter-spacing: -0.01em;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+/* 收起按钮只在窄屏上显示。 */
+.closeButton {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--cs-radius);
+  background: transparent;
+  color: var(--cs-text-muted);
+  cursor: pointer;
+}
+
+/* 主按钮“新建研究”：深绿实心；不可用时变淡。 */
+.primaryAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-2);
+  min-height: 46px;
+  border: none;
+  border-radius: var(--cs-radius);
+  background: var(--cs-green-700);
+  color: #fff;
+  font-size: var(--cs-text-base);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.primaryAction:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.soon {
+  padding: 0 var(--cs-space-2);
+  border: 1px solid rgb(255 255 255 / 0.5);
+  border-radius: var(--cs-radius-sm);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+}
+
+.divider {
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--cs-border);
+}
+
+/* ── 左下角用户区：用 margin-top: auto 推到侧栏底部 ── */
+.user {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2);
+  margin-top: auto;
+  padding-top: var(--cs-space-4);
+  border-top: 1px solid var(--cs-border);
+}
+
+.userInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-3);
+  min-width: 0;
+  padding: 0 var(--cs-space-2);
+}
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--cs-surface);
+  border: 1px solid var(--cs-border);
+  color: var(--cs-green-700);
+  font-weight: 600;
+}
+
+.email {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--cs-text-sm);
+}
+
+.userActions {
+  display: flex;
+  gap: var(--cs-space-1);
+}
+
+.userAction {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cs-space-2);
+  min-height: 36px;
+  padding: 0 var(--cs-space-2);
+  border: none;
+  border-radius: var(--cs-radius);
+  background: transparent;
+  color: var(--cs-text-muted);
+  font-size: var(--cs-text-sm);
+  cursor: pointer;
+}
+
+.userAction:hover:not(:disabled) {
+  background: rgb(31 90 61 / 0.06);
+  color: var(--cs-text);
+  text-decoration: none;
+}
+
+/* 当前就在设置页：浅绿底、深绿字，与侧栏导航的选中样式一致。 */
+.userActionActive,
+.userActionActive:hover:not(:disabled) {
+  background: var(--cs-green-50);
+  color: var(--cs-green-700);
+}
+
+.userAction:disabled,
+.userActionDisabled {
+  color: var(--cs-text-faint);
+  cursor: default;
+}
+
+.userError {
+  padding: 0 var(--cs-space-2);
+  font-size: var(--cs-text-xs);
+  color: var(--cs-danger);
+}
+
+/* ── 右侧：顶栏 + 内容 ── */
+.main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+/* 顶栏：底边线贯穿整个右侧区域，里面的内容（.topbarInner）与下方页面内容同宽、同样居中。 */
+.topbar {
+  height: var(--cs-topbar-height);
+  border-bottom: 1px solid var(--cs-border);
+}
+
+/*
+ * 顶栏内容和页面内容（.content）用同一个最大宽度、同样居中、同样的左右留白，
+ * 顶栏里的页面名称和下面的大标题左边缘对齐在一条线上（2026-10-26 调整）。
+ */
+.topbarInner {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-3);
+  width: 100%;
+  max-width: var(--cs-content-max-width);
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 var(--cs-space-8);
+}
+
+.pageTitle {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+}
+
+/* 菜单按钮只在窄屏上显示。 */
+.menuButton {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-left: calc(-1 * var(--cs-space-2));
+  border: none;
+  border-radius: var(--cs-radius);
+  background: transparent;
+  cursor: pointer;
+}
+
+/*
+ * 页面内容区：限制最大宽度并在右侧区域中居中。
+ * 原来固定靠左，在 1920 宽的大屏上右边空出约 500px，整页偏向一侧（2026-10-26 在截图中发现）。
+ * 最大宽度定义在 tokens.css（--cs-content-max-width），顶栏内容也用它，两处保持一致。
+ */
+.content {
+  flex: 1;
+  width: 100%;
+  max-width: var(--cs-content-max-width);
+  margin: 0 auto;
+  padding: var(--cs-space-8);
+}
+
+.backdrop {
+  display: none;
+}
+
+/* ── 窄屏（手机、窄窗口） ── */
+@media (max-width: 899px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    z-index: 20;
+    /* 平时移出屏幕左侧；展开时滑回来。 */
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+
+  .closeButton,
+  .menuButton {
+    display: inline-flex;
+  }
+
+  .backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    background: rgb(20 30 25 / 0.35);
+  }
+
+  .topbarInner {
+    padding: 0 var(--cs-space-4);
+  }
+
+  /* 手机两侧各留 16px。 */
+  .content {
+    padding: var(--cs-space-6) var(--cs-space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}

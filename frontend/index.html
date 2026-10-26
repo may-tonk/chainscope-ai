@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  页面外壳：浏览器最先拿到的就是这个文件。
+  它本身几乎是空的，React 启动后把整个界面渲染进下面的 <div id="root">。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- 让手机按实际屏幕宽度显示，而不是缩小显示电脑版页面 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 不让浏览器把页面地址（可能含有站内路径）通过 Referer 发给外部网站 -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>ChainScope</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+/* “无法连接”错误页：一张卡片放在窗口正中。 */
+
+.screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--cs-space-4);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+  width: 100%;
+  max-width: 420px;
+  padding: var(--cs-space-8);
+  background: var(--cs-surface);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-lg);
+  box-shadow: var(--cs-shadow-card);
+}
+
+.title {
+  font-size: var(--cs-text-xl);
+  font-weight: 600;
+}

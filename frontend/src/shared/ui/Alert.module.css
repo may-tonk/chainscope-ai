@@ -1,0 +1,52 @@
+/* 提示条的样式：浅色背景 + 同色系文字和图标。 */
+
+.alert {
+  display: flex;
+  gap: var(--cs-space-3);
+  padding: var(--cs-space-3) var(--cs-space-4);
+  border-radius: var(--cs-radius);
+  font-size: var(--cs-text-sm);
+  line-height: 1.6;
+}
+
+.icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.body {
+  min-width: 0;
+  /* 均衡换行：避免最后一行只剩一两个字（例如“请用新密码登\n录”）。
+   * 2026-10-26 在 Edge 截图中发现；不支持的浏览器会忽略这一行，照常换行。 */
+  text-wrap: pretty;
+}
+
+/* 请求编号用等宽字体，方便逐位核对；颜色淡一些，不抢主要信息。 */
+.requestId {
+  margin-top: var(--cs-space-1);
+  font-family: var(--cs-font-mono);
+  font-size: var(--cs-text-xs);
+  opacity: 0.75;
+  /* 编号很长，窄屏上允许在任意位置换行，避免撑出横向滚动条。 */
+  word-break: break-all;
+}
+
+.error {
+  background: var(--cs-danger-bg);
+  color: var(--cs-danger);
+}
+
+.warning {
+  background: var(--cs-warning-bg);
+  color: var(--cs-warning);
+}
+
+.success {
+  background: var(--cs-success-bg);
+  color: var(--cs-success);
+}
+
+.info {
+  background: var(--cs-info-bg);
+  color: var(--cs-info);
+}
