@@ -1,0 +1,105 @@
+/*
+ * 设置分区卡片的样式（左右两栏，窄屏上下排列），以及各分区表单共用的样式。
+ * 卡片外观与工作台首页的卡片一致（白底、细边框、圆角、轻阴影）。
+ */
+
+.section {
+  display: grid;
+  /* 左栏说明占 2 份，右栏内容占 3 份；左栏至少 220px，避免说明文字挤成一条。 */
+  grid-template-columns: minmax(220px, 2fr) minmax(0, 3fr);
+  gap: var(--cs-space-8);
+  padding: var(--cs-space-6);
+  background: var(--cs-surface);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-lg);
+  box-shadow: var(--cs-shadow-card);
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2);
+}
+
+.title {
+  font-size: var(--cs-text-lg);
+  font-weight: 600;
+}
+
+.description {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+/* 右栏内容最宽 420px：表单输入框不会在大屏上被拉得很长，和登录页的表单宽度接近。 */
+.content {
+  min-width: 0;
+  max-width: 420px;
+}
+
+/* ── 危险区：红色边框、红色标题，和普通设置明显区分 ── */
+.danger {
+  border-color: rgb(179 65 46 / 0.35);
+  box-shadow: none;
+}
+
+.danger .title {
+  color: var(--cs-danger);
+}
+
+/* ── 分区里的表单（各操作共用） ── */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+}
+
+/* 表单按钮靠左、按内容宽度，不占满一行（设置页的按钮是“次要操作”，不需要像登录按钮那样醒目）。 */
+.actions {
+  display: flex;
+}
+
+/* 账户信息列表：标题在上、内容在下。 */
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+  margin: 0;
+}
+
+.facts dt {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+}
+
+.facts dd {
+  margin: var(--cs-space-1) 0 0;
+  word-break: break-all;
+}
+
+/* 注销账户的后果列表。 */
+.consequences {
+  margin: var(--cs-space-2) 0 0;
+  padding-left: 1.2em;
+}
+
+/* 内容区较窄时（含侧栏在内，窗口小于 1100px）改为上下排列。 */
+@media (max-width: 1099px) {
+  .section {
+    grid-template-columns: 1fr;
+    gap: var(--cs-space-5);
+  }
+}
+
+/* 手机上卡片内边距小一些，内容区占满宽度。 */
+@media (max-width: 899px) {
+  .section {
+    padding: var(--cs-space-5);
+  }
+
+  .content {
+    max-width: none;
+  }
+}

@@ -1,0 +1,157 @@
+/* 工作台首页的样式：大标题、白色卡片、“即将上线”功能卡片网格。 */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-8);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2);
+}
+
+.title {
+  font-size: var(--cs-text-2xl);
+  font-weight: 700;
+}
+
+.subtitle {
+  color: var(--cs-text-muted);
+}
+
+.card {
+  padding: var(--cs-space-6);
+  background: var(--cs-surface);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-lg);
+  box-shadow: var(--cs-shadow-card);
+}
+
+.cardTitle {
+  font-size: var(--cs-text-lg);
+  font-weight: 600;
+}
+
+/* 卡片标题行：左边标题，右边“账户设置”链接。 */
+.cardHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cs-space-4);
+}
+
+.cardLink {
+  font-size: var(--cs-text-sm);
+  white-space: nowrap;
+}
+
+/* 账户信息：标题在上、内容在下，窄屏自动换行。 */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cs-space-6) var(--cs-space-12);
+  margin: var(--cs-space-4) 0 0;
+}
+
+.facts dt {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+}
+
+.facts dd {
+  margin: var(--cs-space-1) 0 0;
+  /* 很长的邮箱允许换行，不撑出横向滚动条。 */
+  word-break: break-all;
+}
+
+/* ── “即将上线” ── */
+.upcoming {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+}
+
+.sectionHeading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-1);
+}
+
+.sectionText {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+}
+
+/*
+ * 卡片网格：每张卡片至少 260px 宽，放得下几列就放几列。
+ * 功能变多、变少都不需要改样式：宽屏三列，笔记本两到三列，手机一列。
+ *
+ * 用 auto-fit 而不是 auto-fill：auto-fill 在宽屏上会给“不存在的第四张卡片”留空位，
+ * 卡片区右边缘比上面的账户卡片短一截；auto-fit 让现有卡片平分整行，左右边缘与账户卡片对齐
+ * （2026-10-26 在 1920×1080 截图中发现）。
+ */
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--cs-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 未上线的功能卡片：虚线边框、不加阴影，和可用的内容区分开，表示“这里以后会有东西”。 */
+.featureCard {
+  display: flex;
+  gap: var(--cs-space-3);
+  padding: var(--cs-space-5);
+  background: var(--cs-surface);
+  border: 1px dashed var(--cs-border-strong);
+  border-radius: var(--cs-radius-lg);
+}
+
+.featureIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--cs-radius);
+  background: var(--cs-green-50);
+  color: var(--cs-green-700);
+}
+
+.featureBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-1);
+  min-width: 0;
+}
+
+.featureTitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cs-space-2);
+  font-weight: 600;
+}
+
+.featureText {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+  line-height: 1.6;
+}
+
+/* “即将上线”小标签，与侧栏的标签一致。 */
+.badge {
+  padding: 0 var(--cs-space-2);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-sm);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--cs-text-faint);
+  white-space: nowrap;
+}

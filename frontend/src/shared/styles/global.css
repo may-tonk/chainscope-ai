@@ -1,0 +1,79 @@
+/*
+ * 全局基础样式：对所有页面生效的最基本规则。
+ * 具体组件、页面的样式写在各自旁边的 *.module.css 里（CSS Modules），类名自动加后缀，互不冲突。
+ */
+
+/* 宽高计算包含边框和内边距，避免“设了 100% 宽度却撑出容器”的问题。 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  /* 页面最少占满整个窗口高度，背景色不会在内容少时露出白边。 */
+  min-height: 100%;
+}
+
+body {
+  background: var(--cs-bg);
+  color: var(--cs-text);
+  font-family: var(--cs-font-sans);
+  font-size: var(--cs-text-base);
+  line-height: 1.6;
+  /* 让字体边缘在 Mac 上更清晰；Windows 上不影响。 */
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* 按钮、输入框默认不继承页面字体，这里统一成全站字体。 */
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--cs-green-700);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* 用键盘操作时显示统一的焦点框；用鼠标点击时不显示（:focus-visible 由浏览器判断）。 */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--cs-focus-ring);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+/*
+ * 只给读屏软件看、屏幕上不显示的文字（无障碍）。
+ * 例如图标按钮旁边的说明“显示密码”，视力障碍用户的读屏软件能读出来。
+ */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

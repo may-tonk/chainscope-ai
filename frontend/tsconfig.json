@@ -1,0 +1,35 @@
+// TypeScript 类型检查配置。只做检查，不输出文件（打包由 Vite 完成）。
+// 运行：npm run typecheck
+{
+  "compilerOptions": {
+    // 按较新的浏览器标准编写和检查代码；实际兼容范围由 Vite 打包决定。
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    // 按打包工具（Vite）的方式查找 import 的文件。
+    "moduleResolution": "bundler",
+    // React 17 以后的写法：.tsx 文件里不需要手动 import React。
+    "jsx": "react-jsx",
+
+    // ── 严格检查：尽量在写代码时就发现错误 ──
+    "strict": true,
+    // 声明了却没用到的变量、参数直接报错，避免残留代码。
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    // switch 分支漏写 break 时报错。
+    "noFallthroughCasesInSwitch": true,
+    // 从数组、对象按下标取值时，类型里带上“可能不存在”，强制处理这种情况。
+    "noUncheckedIndexedAccess": true,
+    // 只导入类型时必须写 import type，打包时能明确删掉，不产生多余代码。
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // 不检查 node_modules 里第三方包自带的类型声明，加快速度。
+    "skipLibCheck": true,
+    "noEmit": true,
+
+    // 全局类型：Vite 的 import.meta.env、CSS Modules 等；测试里的 jest-dom 断言。
+    "types": ["vite/client", "@testing-library/jest-dom/vitest"]
+  },
+  "include": ["src", "tests", "vite.config.ts"]
+}
