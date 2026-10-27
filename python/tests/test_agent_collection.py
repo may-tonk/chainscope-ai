@@ -420,8 +420,11 @@ def test_recovery_never_takes_live_worker_and_unknown_budget_is_not_reset(contro
     assert result["error"]["code"] == "BUDGET_REVIEW_REQUIRED"
     service.store.grant_extra_budget(data["run_id"], OWNER, 100, 100)
     plan = prepare(service, "resume", run_id=data["run_id"])
-    assert plan["budget"]["used_http_attempts"] == 1000
-    assert plan["budget"]["max_http_attempts"] == 1100
+    # 用量不确定时按原额度全额计入；原额度取自服务列表配置（config/supported_tokens.toml），
+    # 不在测试里写死数字，配置调整后测试仍检查同一条规则。
+    allowance = Registry.load().policy.max_http_attempts
+    assert plan["budget"]["used_http_attempts"] == allowance
+    assert plan["budget"]["max_http_attempts"] == allowance + 100
 
 
 def test_unclaimed_launch_recovery_fences_old_ticket(control):

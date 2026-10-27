@@ -3,7 +3,10 @@ version = 1
 
 [policy]
 max_runtime_seconds = 21600
-max_http_attempts = 1000
+# 每个新运行可用的采集进程 HTTP 尝试次数（软上限）。2026-10-27 用户确认从 1000 提高到 2000：
+# 实测 Swap 补充阶段约每分钟 10 次、每个 5 万区块窗口 50～70 次，1000 次不够一次约一周的增量补采。
+# 只影响之后新建的运行；已有运行恢复时沿用原预算，需要用 /budget 追加。
+max_http_attempts = 2000
 plan_ttl_seconds = 900
 poll_interval_seconds = 15
 window_size = 50000
