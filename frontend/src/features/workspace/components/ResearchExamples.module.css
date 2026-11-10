@@ -1,0 +1,12 @@
+/* 示例卡片按可用宽度排列，数量变化不需要修改列数。 */
+.section { display: flex; flex-direction: column; gap: 14px; }
+.heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; }
+.heading h2 { font-size: 14px; font-weight: 600; }
+.heading > span { font-size: 12px; color: var(--cs-text-muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 14px; }
+.card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 20px; text-align: left; background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: 12px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.card:hover { border-color: #a4bdaa; background: #f9fcfa; }
+.cardTop { display: flex; justify-content: space-between; color: var(--cs-text-muted); }
+.category { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--cs-green-700); }
+.title { font-size: 14px; font-weight: 600; }
+.description { color: var(--cs-text-muted); font-size: 12px; line-height: 1.8; }

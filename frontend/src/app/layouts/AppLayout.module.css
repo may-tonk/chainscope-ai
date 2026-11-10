@@ -78,6 +78,9 @@
   cursor: not-allowed;
 }
 
+/* 新建研究改用站内链接，保留按钮视觉，不继承全局链接下划线。 */
+.primaryAction:hover { text-decoration: none; background: var(--cs-green-600); }
+
 .soon {
   padding: 0 var(--cs-space-2);
   border: 1px solid rgb(255 255 255 / 0.5);

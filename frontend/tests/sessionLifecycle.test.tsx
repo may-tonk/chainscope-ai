@@ -140,7 +140,7 @@ describe("由配置驱动的内容", () => {
 
   it("首页“即将上线”卡片与导航配置中未上线的功能一一对应", async () => {
     renderApp("/", [...LOGGED_IN]);
-    await screen.findByRole("heading", { name: "即将上线" });
+    await screen.findByRole("heading", { name: "你的研究，逐步积累" });
 
     const expected = upcomingFeatures();
     expect(expected.length).toBeGreaterThan(0);

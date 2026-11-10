@@ -116,8 +116,8 @@ export function upcomingFeatures(): NavItem[] {
   return primaryNavigation.items.filter((item) => !item.available);
 }
 
-/** 左侧栏顶部的主按钮。研究功能上线前保持不可用。 */
+/** 新建研究仅进入草稿会话；分析执行状态由研究服务另行决定。 */
 export const primaryAction = {
   label: "新建研究",
-  available: false,
+  available: true,
 } as const;

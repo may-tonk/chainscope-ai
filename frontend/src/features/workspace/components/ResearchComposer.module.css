@@ -1,0 +1,23 @@
+/* 输入区复用设计变量，支持自然换行和触屏，不依赖额外样式框架。 */
+.composer { background: var(--cs-surface); border: 1px solid #b5ccbe; border-radius: 18px; box-shadow: 0 8px 32px rgb(25 65 43 / 0.055); padding: 24px; }
+.composer:focus-within { border-color: var(--cs-green-600); box-shadow: 0 8px 32px rgb(25 65 43 / 0.07); }
+.topline { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.topline label { font-size: 14px; font-weight: 600; }
+.topline > span { font-size: 12px; color: var(--cs-text-muted); }
+.composer textarea { display: block; width: 100%; min-height: 130px; max-height: 360px; padding: 0; border: 0; background: transparent; resize: vertical; font-size: 16px; line-height: 1.9; }
+.composer textarea:focus-visible { outline: none; box-shadow: none; }
+.composer textarea::placeholder { color: #89938d; }
+.contexts { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0 0 14px; }
+.context { display: inline-flex; align-items: center; gap: 7px; padding: 5px 8px; background: var(--cs-green-50); color: var(--cs-green-700); border: 1px solid var(--cs-green-100); border-radius: 7px; font-size: 12px; }
+.context button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 0; background: transparent; border-radius: 4px; color: inherit; cursor: pointer; }
+.context button:hover { background: var(--cs-green-100); }
+.toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; border-top: 1px solid var(--cs-border); padding-top: 16px; margin-top: 16px; }
+.tools { display: flex; gap: 16px; align-items: center; }
+.chain { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--cs-text-muted); }
+.chain > span { width: 6px; height: 6px; border-radius: 50%; background: #b8934e; }
+.clear { padding: 5px; background: none; border: none; border-radius: 4px; font-size: 12px; color: var(--cs-text-muted); cursor: pointer; }
+.clear:disabled { opacity: 0.45; cursor: default; }
+.footnote { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 14px; font-size: 12px; color: var(--cs-text-muted); }
+.footnote > span:first-child { display: inline-flex; gap: 5px; align-items: center; }
+.error { margin-top: 12px; color: var(--cs-danger); font-size: 13px; }
+@media (max-width: 600px) { .composer { padding: 18px; border-radius: 12px; } .topline > span { display: none; } .composer textarea { font-size: 15px; } .toolbar { gap: 12px; } .toolbar > button { flex: 1; min-width: 132px; white-space: nowrap; } .footnote > span:first-child { display: none; } }

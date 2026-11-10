@@ -21,11 +21,12 @@ import { LoginPage } from "../features/auth/pages/LoginPage";
 import { RegisterPage } from "../features/auth/pages/RegisterPage";
 import { ResetPasswordPage } from "../features/auth/pages/ResetPasswordPage";
 import { GuestOnly, RequireAuth } from "../features/auth/session/guards";
-import { HomePage } from "../features/workspace/pages/HomePage";
+import { ResearchSessionRoute } from "../features/research/pages/ResearchSessionRoute";
+import { ResearchHomeRoute } from "./ResearchHomeRoute";
 import { AppLayout } from "./layouts/AppLayout";
 import { AuthLayout } from "./layouts/AuthLayout";
 import { RootLayout } from "./layouts/RootLayout";
-import { upcomingFeatures, type RouteHandle } from "./navigation";
+import { type RouteHandle } from "./navigation";
 import { NotFoundPage } from "./NotFoundPage";
 
 export const routes: RouteObject[] = [
@@ -63,8 +64,18 @@ export const routes: RouteObject[] = [
           {
             path: "/",
             // “即将上线”的卡片由导航配置生成，首页本身不写死功能列表。
-            element: <HomePage upcoming={upcomingFeatures()} />,
+            element: <ResearchHomeRoute />,
             handle: { title: "研究空间" } satisfies RouteHandle,
+          },
+          {
+            path: "/research/new",
+            element: <ResearchSessionRoute />,
+            handle: { title: "AI 研究" } satisfies RouteHandle,
+          },
+          {
+            path: "/research/:sessionId",
+            element: <ResearchSessionRoute />,
+            handle: { title: "AI 研究" } satisfies RouteHandle,
           },
           {
             path: "/settings",

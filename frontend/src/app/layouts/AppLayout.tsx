@@ -83,12 +83,11 @@ export function AppLayout() {
           </button>
         </div>
 
-        {/* 主按钮：研究功能上线前不可用。 */}
-        <button type="button" className={styles.primaryAction} disabled={!primaryAction.available}>
+        {/* 新建研究打开未发送草稿；不表示分析后端已经接通。 */}
+        <Link to="/research/new" className={styles.primaryAction} onClick={closeSidebar}>
           <Plus size={18} aria-hidden="true" />
           <span>{primaryAction.label}</span>
-          {!primaryAction.available && <span className={styles.soon}>即将上线</span>}
-        </button>
+        </Link>
 
         <nav className={styles.nav} aria-label="主导航">
           <NavList group={primaryNavigation} onNavigate={closeSidebar} />
