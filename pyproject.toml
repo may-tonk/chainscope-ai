@@ -34,28 +34,115 @@ analysis = [
     "openpyxl>=3.1,<4",
     "jupyterlab>=4,<5",
     "ipykernel>=6,<8",
+    # 统计检验、时序分析、地址关系图和补充绘图；具体指标仍需单独定义与验证。
+    "scipy>=1.18.1,<2",
+    "statsmodels>=0.15,<0.16",
+    "networkx>=3.7,<4",
+    "seaborn>=0.13.2,<0.14",
+    # 解析、检查和转换 SQL，不因安装而开放模型执行任意 SQL 的权限。
+    "sqlglot>=30.30,<31",
 ]
 api = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.34,<1",
+    # 流式研究状态、文件上传和认证已有模块的运行依赖。
+    "sse-starlette>=3.7,<4",
+    "python-multipart>=0.0.31,<1",
+    "psycopg[binary]>=3.3.6,<4",
+    "pwdlib[argon2]>=0.3.1,<1",
 ]
 dev = [
     "pip>=24,<27",
     "setuptools==77.0.3",
     "wheel>=0.45,<1",
     "pytest>=8,<10",
+    # 分析 Agent 使用异步工具和流式调用，测试时需要覆盖异步执行与取消。
+    "pytest-asyncio>=1.4.1.post1,<2",
     "pytest-cov>=6,<8",
     "respx>=0.22,<1",
     "ruff>=0.11,<1",
     "mypy>=1.15,<2",
     "pre-commit>=4,<5",
     "types-requests",
+    "types-PyYAML>=6,<7",
+    # 异步 API 生命周期、性质测试、超时和并行测试；安装不会启动测试容器。
+    "asgi-lifespan>=2.1,<3",
+    "hypothesis>=6.170,<7",
+    "pytest-timeout>=2.4,<3",
+    "pytest-xdist>=3.8,<4",
+    "fakeredis[lua]>=2,<3",
+    "testcontainers>=4.15,<5",
+    # 构建发行包与检查第三方依赖，便于后续服务器交付。
+    "build>=1.6,<2",
+    "pip-audit>=2.10,<3",
+    "langgraph-cli>=0.4.42,<0.5",
 ]
 agent = [
     "openai>=3.35.1",
     "openai-agents>=0.24.0",
     "psutil>=7.2.2,<8",
     "prompt-toolkit>=3.0.53,<4",
+]
+# 研究分析的运行依赖与原有采集 Agent 分开，服务器可按需要单独启用此分组。
+# DeepSeek 适配包会间接使用 OpenAI 协议客户端库，但模型服务仍由应用配置决定。
+research = [
+    "pyyaml>=6,<7",
+    "langchain>=1.4.9,<2",
+    "langgraph>=1.2.20,<2",
+    "langchain-deepseek>=1.1.1,<2",
+    # checkpoint 仅提供图状态持久化能力；安装依赖不会连接账户库或自动建表。
+    "langgraph-checkpoint-postgres>=3.2.0,<4",
+    # binary 同时覆盖 Windows/Linux 驱动安装，pool 提供持久化后端需要的连接池。
+    "psycopg[binary,pool]>=3.3.6,<4",
+    # 同步与异步 Redis 客户端共用此包，hiredis 提供解析加速；服务端另行部署。
+    "redis[hiredis]>=8.1.0,<9",
+    # 同时准备本地开发和 Redis 的 checkpoint 适配器，不预先决定持久化部署。
+    "langgraph-checkpoint-sqlite>=3.1.3,<4",
+    # 该适配器当前声明支持 Python <3.15；本项目实际开发与部署基线仍是 3.12。
+    "langgraph-checkpoint-redis>=0.6,<0.7; python_version < '3.15'",
+    # 通用集成、MCP 工具，以及本地/托管模型接口；不会下载模型权重或启动模型服务。
+    "langchain-community>=0.4.2,<0.5",
+    "langchain-mcp-adapters>=0.3.2,<0.4",
+    "mcp>=1.24,<2",
+    "langchain-ollama>=1.1,<2",
+    "langchain-huggingface>=1.2.3,<2",
+]
+# 知识检索：文档处理、混合检索与多种向量存储客户端均提前准备。
+# Python 客户端不代替 Linux 服务端安装，也不会创建集合、扩展或数据库表。
+rag = [
+    "langchain-text-splitters>=1.1.3,<2",
+    "langchain-chroma>=1.1,<2",
+    "chromadb>=1.5.9,<2",
+    "langchain-postgres>=0.0.19,<0.1",
+    # 当前 langchain-postgres 要求 pgvector <0.4，不能单独追升该客户端至 0.5。
+    "pgvector>=0.3,<0.4",
+    "qdrant-client>=1.20,<2",
+    "rank-bm25>=0.2.2,<0.3",
+    "pypdf>=7,<8",
+    "pdfplumber>=0.11.10,<0.12",
+    "python-docx>=1.2,<2",
+    "python-pptx>=1.0.2,<2",
+    "beautifulsoup4>=4.14,<5",
+    "lxml>=6,<7",
+    "trafilatura>=2.3,<3",
+    "markdown>=3.11,<4",
+]
+# 任务、对象存储与隔离执行：这里只安装 SDK，不创建远程资源或运行后台进程。
+services = [
+    "celery[redis]>=5.7,<6",
+    "boto3>=1.43,<2",
+    "docker>=7.2,<8",
+    "e2b>=2.63,<3",
+    "e2b-code-interpreter>=2.11.9,<3",
+]
+# 运行观测：指标、追踪和错误采集均需要后续显式配置，不自动上报研究数据。
+observability = [
+    "prometheus-client>=0.26,<0.27",
+    "opentelemetry-api>=1,<2",
+    "opentelemetry-sdk>=1,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1,<2",
+    "opentelemetry-instrumentation-fastapi>=0.66b2,<0.67",
+    "sentry-sdk[fastapi,sqlalchemy]>=2.74,<3",
 ]
 
 [tool.pytest.ini_options]
@@ -76,4 +163,5 @@ package-dir = {"" = "python"}
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["chainscope", "chainscope.*"]
+# 新研究包沿用 python/ 源码布局，发布时与采集包一起被发现；业务模块按职责逐步实现。
+include = ["chainscope", "chainscope.*", "chainscope_research", "chainscope_research.*"]

@@ -1,0 +1,23 @@
+# 四个工具的运行设置；只管理运行策略，不授予用户权限。
+# 修改后重新装配生效；工具输入/输出类型仍由 Pydantic 合同定义。
+max_parallel_calls: 2  # 每个运行实例最多同时占用的查询/计算线程，不是全站容量承诺。
+max_analysis_rows: 200000  # 每个时段最多读取的正式 Transfer 数；超过即失败，不冒充全量。
+max_periods: 12  # 一次分析的重点、比较、背景时段总数上限。
+evidence_limit: 10  # 每个时段返回的事件证据样例上限，实际总量另有指标。
+top_addresses: 5  # 按普通转账金额列出的发送/接收或对手地址数量。
+connect_timeout_seconds: 5  # 数据库建立连接超时。
+read_timeout_seconds: 30  # 驱动单次读取等待上限；SQL 另有执行时间限制。
+cursor_ttl_seconds: 900  # 分页游标最长有效秒数，还受当前调用截止时间约束。
+tools:
+  lookup_transaction_events:
+    enabled: true
+    timeout_seconds: 20  # 含等待执行资源、查询和结果构造；不会无限重试。
+  lookup_block_events:
+    enabled: true
+    timeout_seconds: 20
+  analyze_address_activity:
+    enabled: true
+    timeout_seconds: 30
+  analyze_token_activity:
+    enabled: true
+    timeout_seconds: 30

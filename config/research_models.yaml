@@ -1,0 +1,82 @@
+# 研究主 LLM 专用；不改变采集 Agent，也不配置记忆或 RAG。
+# 修改后需要重新装配/重启研究应用，不支持运行中热更新。
+# 读取顺序：YAML 普通设置 → 允许的环境变量覆盖 → Pydantic 校验。
+# 主模型名称覆盖：CHAINSCOPE_RESEARCH_MODEL，其次 DEEPSEEK_MODEL。
+# 备用名称覆盖：CHAINSCOPE_RESEARCH_FALLBACK_MODEL。
+# 接口地址可被 DEEPSEEK_BASE_URL 同时覆盖，但仍只允许官方 HTTPS 地址。
+# 不要把真实密钥写在这里；仅通过 api_key_env 指向环境变量。
+
+# true：主模型发生允许恢复的故障时尝试备用；false：只使用主模型。
+# 主备都属于同一供应商，不能覆盖供应商整体故障或共享账号额度问题。
+fallback_enabled: true
+primary:
+  # 当前适配器只实现 DeepSeek；不能仅改此名字就切换供应商。
+  provider: deepseek
+  # 当前支持 deepseek-flash / deepseek-v4-pro，启用备用时二者不能相同。
+  model: deepseek-flash
+  # 官方标准接口；允许同一地址的 /v1 路径，禁止凭证、查询参数或第三方域名。
+  base_url: https://api.deepseek.com
+  # 密钥环境变量名称；部署环境优先于项目本地 .env。
+  api_key_env: DEEPSEEK_API_KEY
+  # 单次请求超时，单位秒；范围 1～120，仍受整轮剩余时间约束。
+  request_timeout_seconds: 45
+  # 必须为 0：所有再次尝试由统一预算控制，避免 SDK 隐藏重试造成超支。
+  sdk_max_retries: 0
+  # 决策阶段：非流式 JSON，必须通过 MainDecision 校验；不会直接显示给用户。
+
+
+  decision:
+    # 采样温度 0～2；0 也不保证绝对重复或事实正确。thinking 开启时须设 null。
+    temperature: 0.0
+    # 核采样概率，通常保持 null；不要与 temperature 同时设置。
+    # flash 非 thinking 模式会忽略此参数，所以当前模式只允许 null。
+    top_p: null
+    # 本阶段最大生成 token，工程上限 128～8192；它不是字符数或输入长度。
+    max_tokens: 2048
+    # enabled / disabled。思考内容不转发为正文；开启后仍需检查参数兼容性。
+    thinking: disabled
+  # 正文阶段：通过原生 astream 交付；流式要求由代码固定，不能配置成非流式。
+
+  response:
+    # 正文独立温度，允许与决策不同；当前采用 0.2。
+    temperature: 0.2
+    # 当前模式保持 null，含义与决策阶段相同。
+    top_p: null
+    # 正文输出 token 上限；遇到截断会报告失败，不伪装完整回复。
+    max_tokens: 2048
+    # 当前关闭思考；若开启，需要同时把 temperature 改成 null。
+    thinking: disabled
+
+fallback:
+  # 备用承担相同主 Agent 职责，不新建权限、记忆或工具执行链。
+  provider: deepseek
+  # 此模型可能具有不同价格/延迟；实际使用会记录在终止事件的 model_attempts。
+  model: deepseek-v4-pro
+  # 同样受官方端点校验；不能填入任意代理地址。
+  base_url: https://api.deepseek.com
+  # 当前与主模型共用已授权凭证，不能解决此账号余额耗尽或认证失败。
+  api_key_env: DEEPSEEK_API_KEY
+  # 单次备用请求超时，单位秒；不会重置整轮截止时间。
+  request_timeout_seconds: 45
+  # 仍必须为 0，不叠加备用 SDK 的自动重试。
+  sdk_max_retries: 0
+
+
+  decision:
+    # 备用决策使用自己的温度，仍遵守相同 Pydantic 输出合同。
+    temperature: 0.0
+    # 未使用时写 null，不用空字符串代替。
+    top_p: null
+    # 备用决策 token 上限，范围 128～8192。
+    max_tokens: 2000
+    # 如改 enabled，temperature 必须 null；pro thinking 的 top_p 也须 null。
+    thinking: disabled
+  response:
+    # 备用正文的独立采样温度，范围 0～2。
+    temperature: 0.5
+    # 与 temperature 二选一；保持 null 表示不传此可选参数。
+    top_p: null
+    # 备用正文 token 上限，范围 128～8192。
+    max_tokens: 3000
+    # 与主模型一样，额外思考内容不会进入用户正文流。
+    thinking: disabled

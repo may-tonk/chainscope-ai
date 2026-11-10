@@ -1,0 +1,120 @@
+# 用途：部署 ChainScope 的结果缓存与任务协调 Redis，不包含密码、私钥或业务数据。
+# 将本目录的三个配置文件部署到 Linux 服务目录后，再准备 ACL、证书和数据目录。
+# 缺少挂载文件时明确失败，不自动生成空目录，更不会退回到无认证或明文连接。
+name: chainscope-redis
+
+x-redis-common: &redis-common
+  # 补丁版本方便人工识别；同时固定用户从 Linux 本地镜像读取的内容摘要，避免标签漂移。
+  image: redis:8.10.3-alpine3.23@sha256:71885d8cc6e42f2bc0aa2eb853bfc4be200b5108a46ac50e117ae1df0531fb80
+  # 使用镜像内置 redis 用户；持久化目录的实际 UID/GID 在拉取镜像后核对。
+  user: redis
+  restart: unless-stopped
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  # 两个实例只在本 Compose 项目内创建容器，不复用或改动其他服务。
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "3"
+  healthcheck:
+    # 密码从受保护文件读取，不放在 Compose 参数、镜像或健康检查输出中。
+    # $$ 留给容器内的 shell 处理，避免 Compose 在宿主机上展开。
+    # healthcheck 用户仅允许 PING；业务用户与管理用户另行配置。
+    test:
+      - CMD-SHELL
+      - >-
+        REDISCLI_AUTH="$$(cat /run/chainscope/health.password)" &&
+        export REDISCLI_AUTH &&
+        redis-cli --tls --cacert /run/chainscope/tls/ca.crt
+        --user healthcheck -h 127.0.0.1 -p 6379 ping | grep -qx PONG
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+services:
+  cache:
+    <<: *redis-common
+    container_name: chainscope-redis-cache
+    command: [redis-server, /usr/local/etc/redis/redis.conf]
+    # Redis maxmemory 在 cache.conf 中设为 512 MiB；此处限制整个容器为 1 GiB。
+    mem_limit: 1024m
+    # 与 mem_limit 相同表示不额外使用宿主机 Swap，实际支持情况需部署时核验。
+    memswap_limit: 1024m
+    ports:
+      # 首次部署默认仅本机可访问。来源限制验证后，才改为 VMware 地址发布。
+      - "${REDIS_BIND_IP:-127.0.0.1}:6379:6379"
+    # 缓存关闭持久化；临时目录大小也受容器总内存限制，不另建永久缓存数据目录。
+    tmpfs:
+      - /data:rw,noexec,nosuid,size=16m,mode=1777
+    volumes:
+      - type: bind
+        source: ./cache.conf
+        target: /usr/local/etc/redis/redis.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/secrets/cache.acl
+        target: /run/chainscope/users.acl
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/secrets/cache.health.password
+        target: /run/chainscope/health.password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/certificates
+        target: /run/chainscope/tls
+        read_only: true
+        bind:
+          create_host_path: false
+
+  coordination:
+    <<: *redis-common
+    container_name: chainscope-redis-coordination
+    command: [redis-server, /usr/local/etc/redis/redis.conf]
+    # Redis maxmemory 在 coordination.conf 中设为 128 MiB，给 AOF 等开销留出余量。
+    # 1024 MiB + 512 MiB = 用户确认的 1.5 GiB 容器合计上限。
+    mem_limit: 512m
+    memswap_limit: 512m
+    ports:
+      - "${REDIS_BIND_IP:-127.0.0.1}:6380:6379"
+    volumes:
+      - type: bind
+        source: ./coordination.conf
+        target: /usr/local/etc/redis/redis.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/secrets/coordination.acl
+        target: /run/chainscope/users.acl
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/secrets/coordination.health.password
+        target: /run/chainscope/health.password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/certificates
+        target: /run/chainscope/tls
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/hadoop/chainscope-services/redis/data/coordination
+        target: /data
+        bind:
+          create_host_path: false

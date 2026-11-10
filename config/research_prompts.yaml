@@ -1,0 +1,45 @@
+# 研究提示词登记表：代码按逻辑名称取用，路径只在这里维护。
+# 正文继续放 prompts/ 下的独立 UTF-8 TXT 文件，不把长篇提示词放入 YAML。
+# 修改此文件或 TXT 后须重新装配/重启应用；本步不实现热更新。
+# 已加载的模板在本轮主备调用中复用，不能在切换途中临时换一份正文。
+prompts:
+  main_decision:
+    # 相对项目根目录；仅允许解析后仍位于项目 prompts/ 内的 .txt 文件。
+    file: prompts/agents/main/decision.txt
+    # 人工维护的提示词版本；修改正文时同步更新。程序另算内容 SHA-256 便于核对。
+    version: "1"
+    # 必需变量名称，需与正文 {{变量名}} 一致；不是本轮实际参数值。
+    required_variables:
+      # 由 MainDecision.model_json_schema() 生成并序列化，不能手写第二份 Schema。
+      - decision_schema
+  main_response:
+    # 主 Agent 面向用户的流式正文提示词，实际流式行为由程序负责。
+    file: prompts/agents/main/response.txt
+    # 版本不代表软件发布阶段，仅标识这份提示词。
+    version: "1"
+    required_variables:
+      # 来自已通过 Pydantic 校验的 MainDecision，本轮序列化后填入，不写回 YAML。
+      - decision
+
+  # 工具描述同样按名称登记。这里只管理说明文件，不代表工具已经实现或启用。
+  # 当前四份描述都是静态文本；执行参数仍由对应 Pydantic Schema 管理。
+  tool_lookup_transaction_events:
+    # 交易事件查询说明；正文保留在该工具的独立文件夹中。
+    file: prompts/tools/lookup_transaction_events/description.txt
+    version: "2"
+    required_variables: []
+  tool_lookup_block_events:
+    # 区块事件查询说明，不能用交易哈希代替区块哈希。
+    file: prompts/tools/lookup_block_events/description.txt
+    version: "2"
+    required_variables: []
+  tool_analyze_address_activity:
+    # 指定代币范围内的地址活动分析说明。
+    file: prompts/tools/analyze_address_activity/description.txt
+    version: "2"
+    required_variables: []
+  tool_analyze_token_activity:
+    # 代币活动分析说明，涉及时间、比较与背景范围的使用边界。
+    file: prompts/tools/analyze_token_activity/description.txt
+    version: "2"
+    required_variables: []
