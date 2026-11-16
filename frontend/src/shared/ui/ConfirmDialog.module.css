@@ -1,0 +1,37 @@
+/* 确认对话框的样式：屏幕中央的白色卡片，后面的页面加半透明遮罩。 */
+
+.dialog {
+  width: min(440px, calc(100vw - 32px)); /* 手机上两侧各留 16px */
+  padding: var(--cs-space-6);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-lg);
+  background: var(--cs-surface);
+  color: var(--cs-text);
+  box-shadow: 0 12px 40px rgb(20 40 30 / 0.18);
+}
+
+/* 模态打开时，浏览器在对话框后面生成的遮罩层。 */
+.dialog::backdrop {
+  background: rgb(20 30 25 / 0.4);
+}
+
+.title {
+  font-size: var(--cs-text-lg);
+  font-weight: 600;
+}
+
+.body {
+  margin-top: var(--cs-space-3);
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+/* 按钮靠右排列：取消在左、确认在右（常见习惯）。 */
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--cs-space-3);
+  margin-top: var(--cs-space-6);
+}

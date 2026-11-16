@@ -1,6 +1,6 @@
 # 数据库迁移
 
-更新日期：2026-10-19。当前最新版本为 `0009`。MySQL 表结构由 Alembic 管理，Navicat 用于查看和核对。
+更新日期：2026-11-16（独立网站账户迁移说明）。采集 MySQL 迁移脚本最新为 `0009`，网站 PostgreSQL 账户迁移脚本最新为 `0002`；两套版本链独立。本文说明代码中的迁移，不代表在线数据库当前版本。Navicat 继续用于查看和核对。
 
 ## 执行入口
 
@@ -29,10 +29,21 @@
 
 `0009` 只描述新增的四张 Agent 表，不包含前面所有建表步骤。新建库、升级旧环境和部分旧版本恢复后的升级仍需要完整版本链。
 
+## 已实现的网站账户迁移
+
+`alembic.ini` 已有独立 `[webapp]` 配置：入口为 `python/webapp/migrations/env.py`，脚本位于 `python/webapp/migrations/versions/`。`webapp.db.database.migration_config()` 选择该配置；已有 CLI 入口使用 `alembic -n webapp`，不经过采集 MySQL 的 `init-db`。
+
+| 账户版本 | 已有迁移职责 |
+| --- | --- |
+| `0001` | `app_users`、`auth_challenges`、`auth_sessions`、`auth_rate_limits`、`auth_events` 五张账户/认证表 |
+| `0002` | 验证表增加密码重置用途、关联用户、外键/用途约束和索引 |
+
+账户迁移使用独立迁移账号；普通运行账号用于网站日常读写。已实现的迁移入口检查目标库、账号、schema 权限与 TLS，拒绝超级管理员；账户 downgrade 仅允许测试库。网站启动不自动建表或升级，生产账户库装配与部署仍未完成。账户迁移不放入 `python/migrations/0001`～`0009`，也不代表研究会话、报告或任务已有迁移；研究业务迁移仍预留。
+
 ## 保留与兼容
 
 - `models.py` 与 `agent_models.py` 描述当前期望结构，改 Python 类型定义不会自动改变数据库。
-- 已执行版本保留原样，结构变化新增迁移；破坏性 downgrade 被禁用。本轮清理不合并迁移。
+- 已执行版本保留原样，结构变化新增迁移；采集 MySQL 的破坏性 downgrade 被禁用。采集、账户和预留研究迁移不合并。
 - 原始 uint256 金额使用规范字符串完整保存；持仓缓存的 `DECIMAL(65,0)` 有独立范围限制，超限拒绝累计。
 - `0008` 仍可使用原 CLI 采集和只读进度检查；完整 Agent 要求 `0009` 和四张控制表。
 - `sql/migration-0001.sql` 是历史初始导出，不是当前完整建库入口。

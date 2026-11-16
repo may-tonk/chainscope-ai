@@ -1,0 +1,33 @@
+/* 整页加载画面：内容在窗口正中。 */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-4);
+  min-height: 100vh;
+  color: var(--cs-text-muted);
+}
+
+.brand {
+  font-size: var(--cs-text-xl);
+  font-weight: 700;
+  color: var(--cs-green-700);
+}
+
+.spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

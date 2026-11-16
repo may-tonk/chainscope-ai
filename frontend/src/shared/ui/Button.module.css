@@ -1,0 +1,85 @@
+/* 通用按钮的样式。颜色全部来自 shared/styles/tokens.css 的设计变量。 */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cs-space-2);
+  min-height: 42px; /* 电脑上 42px（2026-10-26 调小）；触屏设备在文件末尾改回 44px */
+  padding: 0 var(--cs-space-5);
+  border: 1px solid transparent;
+  border-radius: var(--cs-radius);
+  font-size: var(--cs-text-base);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.block {
+  width: 100%;
+}
+
+/* 主按钮：深绿色实心 */
+.primary {
+  background: var(--cs-green-700);
+  color: #fff;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--cs-green-600);
+}
+
+.primary:active:not(:disabled) {
+  background: var(--cs-green-800);
+}
+
+/* 次要按钮：白底带边框 */
+.secondary {
+  background: var(--cs-surface);
+  border-color: var(--cs-border);
+  color: var(--cs-text);
+}
+
+.secondary:hover:not(:disabled) {
+  border-color: var(--cs-border-strong);
+}
+
+/* 危险按钮：红色 */
+.danger {
+  background: var(--cs-danger);
+  color: #fff;
+}
+
+.danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* 提交中的转圈图标 */
+.spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 用户在系统里设置了“减少动画”时，不转圈（无障碍）。 */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+/* 触屏设备（手机、平板）上加高到 44px，方便手指点中；电脑上用上面的 42px。 */
+@media (pointer: coarse) {
+  .button {
+    min-height: 44px;
+  }
+}

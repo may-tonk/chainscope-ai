@@ -1,4 +1,4 @@
-"""主 Agent 的对话、分派决策和流事件合同；网站认证接入尚未实现。
+"""主 Agent 的对话、分派决策和流事件合同；网站层负责认证并传入可信上下文。
 
 模型只产生业务决策，用户与会话标识由调用方的可信上下文提供。
 """
@@ -18,7 +18,7 @@ class ConversationMessage(Contract):
 
 
 class MainTurnRequest(Contract):
-    """一次主 Agent 请求，历史由未来会话服务按归属读取，不由模型指定用户。"""
+    """一次主 Agent 请求，当前页面显式提供对话文本，不由模型指定用户身份。"""
 
     messages: Annotated[tuple[ConversationMessage, ...], Field(min_length=1)]
 

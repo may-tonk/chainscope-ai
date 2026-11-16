@@ -1,0 +1,23 @@
+/* 设置页的样式：标题区和工作台首页一致，下面各分区卡片依次排列。 */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-6);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2);
+  margin-bottom: var(--cs-space-2);
+}
+
+.title {
+  font-size: var(--cs-text-2xl);
+  font-weight: 700;
+}
+
+.subtitle {
+  color: var(--cs-text-muted);
+}

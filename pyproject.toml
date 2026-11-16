@@ -163,5 +163,5 @@ package-dir = {"" = "python"}
 
 [tool.setuptools.packages.find]
 where = ["python"]
-# 新研究包沿用 python/ 源码布局，发布时与采集包一起被发现；业务模块按职责逐步实现。
-include = ["chainscope", "chainscope.*", "chainscope_research", "chainscope_research.*"]
+# 采集、研究和网站包统一使用 python/ 源码布局，职责分开且均纳入包发现。
+include = ["chainscope", "chainscope.*", "chainscope_research", "chainscope_research.*", "webapp", "webapp.*"]

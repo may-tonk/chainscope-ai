@@ -7,6 +7,7 @@ __pycache__/
 output/
 build/
 dist/
+node_modules/
 *.egg-info/
 logs/*
 !logs/.gitkeep

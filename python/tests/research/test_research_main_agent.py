@@ -11,6 +11,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 from pydantic import ValidationError
 
+from chainscope_research.agent.main_graph import decision_messages, model_messages
 from chainscope_research.application import MainAgentApplication
 from chainscope_research.contracts.main_agent import (
     MainDecision,
@@ -25,6 +26,25 @@ from chainscope_research.services.turn_control import TurnControl
 
 ROOT = Path(__file__).resolve().parents[3]
 REPLY = '{"action":{"kind":"reply","response_goal":"解释链上概念"}}'
+
+
+def test_decision_data_and_response_roles_are_separate():
+    """多轮正文作为决策数据完整保留；面向用户的回复仍使用原始 user/assistant 角色。"""
+    values = [
+        {"role": "user", "content": "解释交易与日志"},
+        {
+            "role": "assistant",
+            "content": '第一条说明。\n第二条含有 "引号" 和 JSON {"x":1}。',
+        },
+        {"role": "user", "content": "把刚才的内容总结成一句话"},
+    ]
+    payload = MainTurnRequest.model_validate_json(json.dumps({"messages": values}))
+    decision = decision_messages("只输出决策 JSON", payload)
+    assert [message.type for message in decision] == ["system", "human"]
+    assert json.loads(decision[-1].content) == {"messages": values}
+    response = model_messages("输出用户可读正文", payload)
+    assert [message.type for message in response] == ["system", "human", "ai", "human"]
+    assert response[2].content == values[1]["content"]
 
 
 class LocalModel:

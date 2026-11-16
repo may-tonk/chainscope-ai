@@ -1,0 +1,86 @@
+/*
+ * 设计变量：全站的颜色、字体、字号、间距、圆角、阴影都集中定义在这里。
+ *
+ * 规则：组件和页面的样式里不直接写颜色值或字体名，只引用这里的变量，例如 var(--cs-green-700)。
+ * 好处：以后要调整风格（换主色、加深色主题），只改这一个文件，页面代码不用动。
+ *
+ * 颜色取自用户提供的 UI 参考图（深绿色方案，2026-10-25 确认全站统一使用）。
+ * 第一版只有浅色主题；以后加深色主题时，在这里补一组 [data-theme="dark"] 的变量即可。
+ */
+:root {
+  /* ── 品牌色：深绿 ── */
+  --cs-green-800: #174630; /* 按钮按下 */
+  --cs-green-700: #1f5a3d; /* 主色：主按钮、链接、Logo */
+  --cs-green-600: #2a6b4a; /* 主按钮鼠标悬停 */
+  --cs-green-100: #dfece4; /* 选中项的边框等 */
+  --cs-green-50: #ecf3ee;  /* 导航选中项的背景、成功提示的背景 */
+
+  /* ── 中性色：背景、文字、边框 ── */
+  --cs-bg: #f7f8f6;        /* 页面背景（略带暖灰，不是纯白） */
+  --cs-surface: #ffffff;   /* 卡片、输入框、表单区域 */
+  --cs-sidebar: #f2f4f1;   /* 工作台左侧栏 */
+  --cs-border: #e2e6e2;    /* 分隔线、卡片和输入框边框 */
+  --cs-border-strong: #c9cfca; /* 输入框鼠标悬停 */
+  --cs-text: #1c2420;      /* 正文 */
+  --cs-text-muted: #66706a; /* 次要文字：说明、时间 */
+  --cs-text-faint: #9aa29d; /* 更弱的文字：占位提示、“即将上线”的导航项 */
+
+  /* ── 状态色：提示条和错误 ── */
+  --cs-danger: #b3412e;     /* 错误、危险操作（注销账户） */
+  --cs-danger-bg: #fbeeeb;
+  --cs-warning: #8a5a00;    /* 警告、“待核验” */
+  --cs-warning-bg: #fdf4e3;
+  --cs-success: var(--cs-green-700);
+  --cs-success-bg: var(--cs-green-50);
+  --cs-info: #2f5d86;
+  --cs-info-bg: #edf3f9;
+
+  /* ── 字体（2026-10-25 用户选择系统自带字体，不下载网页字体）──
+   * 浏览器从左往右找，用第一个本机装有的字体：
+   * Mac 用苹方 / 宋体，Windows 用微软雅黑 / 宋体，都没有时用系统默认。 */
+  --cs-font-sans: "PingFang SC", "Microsoft YaHei", "微软雅黑", "Hiragino Sans GB",
+    system-ui, sans-serif;
+  /* 宋体类只用于登录页大口号等少数标题，正文一律用上面的黑体类。
+   * 最前面先放英文衬线字体 Georgia：浏览器按字符挑字体，英文字母用 Georgia，
+   * 中文字符 Georgia 里没有，就往后找到宋体。否则 Windows 宋体里的英文字母像打字机字体
+   * （2026-10-26 在 Edge 截图里发现“登录 ChainScope”的英文很难看）。 */
+  --cs-font-serif: Georgia, "Times New Roman", "Songti SC", "SimSun", "宋体", serif;
+  /* 等宽字体：链上地址、请求编号，字符等宽便于逐位核对。 */
+  --cs-font-mono: Consolas, "SF Mono", Menlo, monospace;
+
+  /* ── 字号 ── */
+  --cs-text-xs: 12px;
+  --cs-text-sm: 13px;
+  --cs-text-base: 15px;
+  --cs-text-lg: 17px;
+  --cs-text-xl: 22px;
+  --cs-text-2xl: 28px;
+  --cs-text-hero: 44px;
+
+  /* ── 间距：以 4px 为单位，保证各处留白成比例 ── */
+  --cs-space-1: 4px;
+  --cs-space-2: 8px;
+  --cs-space-3: 12px;
+  --cs-space-4: 16px;
+  --cs-space-5: 20px;
+  --cs-space-6: 24px;
+  --cs-space-8: 32px;
+  --cs-space-10: 40px;
+  --cs-space-12: 48px;
+
+  /* ── 圆角和阴影 ── */
+  --cs-radius-sm: 6px;  /* 标签、小按钮 */
+  --cs-radius: 8px;     /* 输入框、按钮、导航项 */
+  --cs-radius-lg: 12px; /* 卡片 */
+  --cs-shadow-card: 0 1px 2px rgb(20 40 30 / 0.04), 0 1px 1px rgb(20 40 30 / 0.03);
+
+  /* ── 焦点框：用键盘 Tab 切换时，当前元素外面显示的高亮框（无障碍要求，不能去掉）── */
+  --cs-focus-ring: 0 0 0 3px rgb(31 90 61 / 0.28);
+
+  /* ── 布局尺寸 ── */
+  --cs-sidebar-width: 248px;
+  --cs-topbar-height: 56px;
+  /* 工作台页面内容（含左右留白）的最大宽度。屏幕更宽时内容居中，两侧留出均匀的空白，
+   * 避免大屏上内容挤在一边、或者一行文字拉得过长难以阅读。 */
+  --cs-content-max-width: 1280px;
+}

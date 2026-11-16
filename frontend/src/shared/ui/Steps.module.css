@@ -1,0 +1,76 @@
+/* 步骤条样式：横向排列，步骤之间用短横线连接。 */
+
+.steps {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-2);
+  min-width: 0;
+  color: var(--cs-text-faint);
+  font-size: var(--cs-text-sm);
+}
+
+/* 步骤之间的连接线：画在除第一步以外每一步的前面。 */
+.step + .step::before {
+  content: "";
+  flex-shrink: 0;
+  width: 16px;
+  height: 1px;
+  margin-right: var(--cs-space-1);
+  background: var(--cs-border-strong);
+}
+
+.marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--cs-border-strong);
+  border-radius: 50%;
+  font-size: var(--cs-text-xs);
+  font-weight: 600;
+}
+
+.label {
+  white-space: nowrap;
+}
+
+/* 当前步骤：深绿实心圆圈，文字加深加粗。 */
+.active {
+  color: var(--cs-text);
+  font-weight: 600;
+}
+
+.active .marker {
+  border-color: var(--cs-green-700);
+  background: var(--cs-green-700);
+  color: #fff;
+}
+
+/* 已完成：浅绿圆圈打勾。 */
+.done {
+  color: var(--cs-text-muted);
+}
+
+.done .marker {
+  border-color: var(--cs-green-100);
+  background: var(--cs-green-50);
+  color: var(--cs-green-700);
+}
+
+/* 很窄的屏幕上只保留当前步骤的文字，其余只显示圆圈，避免一行放不下。 */
+@media (max-width: 380px) {
+  .step:not(.active) .label {
+    display: none;
+  }
+}

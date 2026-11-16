@@ -1,0 +1,152 @@
+/* 聊天页专用布局：居中的阅读列、独立消息滚动和常驻输入区，不改变研究报告页。 */
+.page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+/* 只有消息区消费剩余高度；长消息不会把输入框和顶栏推到视口外。 */
+.viewport {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+.viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--cs-green-100);
+}
+.timeline {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 28px 28px 40px;
+}
+
+/* 新对话在中央展示欢迎和输入，开始对话后恢复消息区占满剩余空间。 */
+.empty {
+  justify-content: center;
+  padding-bottom: clamp(0px, 12dvh, 100px);
+}
+.empty .viewport {
+  flex: 0 1 auto;
+}
+.welcome {
+  padding: 18px 0 20px;
+  text-align: center;
+}
+.welcomeIcon {
+  display: inline-flex;
+  color: var(--cs-green-700);
+  margin-bottom: 18px;
+}
+.welcome h1 {
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.welcome p {
+  margin-top: 10px;
+  color: var(--cs-text-muted);
+  font-size: 14px;
+}
+
+/* 输入区与消息列使用一致宽度；留白考虑手机底部安全区域。 */
+.dock {
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 800px;
+  max-height: 65%;
+  margin: 0 auto;
+  padding: 8px 24px max(12px, env(safe-area-inset-bottom));
+}
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 10px 5px 0;
+  color: var(--cs-text-muted);
+  font-size: 11px;
+}
+.notice {
+  margin-top: 18px;
+  color: var(--cs-text-muted);
+  font-size: 13px;
+}
+.latest {
+  position: absolute;
+  z-index: 1;
+  top: -38px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--cs-border);
+  border-radius: 50%;
+  background: var(--cs-surface);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.06);
+  cursor: pointer;
+}
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--cs-danger-bg);
+  color: var(--cs-danger);
+  font-size: 13px;
+}
+.error p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.error button {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--cs-surface);
+  color: var(--cs-danger);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+@media (max-width: 600px) {
+  .timeline {
+    padding: 20px 18px 32px;
+  }
+  .dock {
+    padding-inline: 12px;
+  }
+  .welcome {
+    padding-inline: 12px;
+  }
+  .meta {
+    font-size: 10px;
+    gap: 4px 8px;
+  }
+}
+/* 矮窗口和软键盘压缩视口时，把空间优先留给输入，欢迎内容可以滚动。 */
+@media (max-height: 650px) {
+  .empty {
+    padding-bottom: 0;
+  }
+  .empty .viewport {
+    flex: 1;
+  }
+  .welcome {
+    padding-block: 8px;
+  }
+}

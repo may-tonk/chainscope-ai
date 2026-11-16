@@ -274,7 +274,8 @@ async def test_configured_prompts_reach_both_models_with_same_snapshot(tmp_path)
     )
     assert "action" in json.loads(schema_text)["properties"]
     assert primary.decisions[0][1].type == "human"
-    assert primary.decisions[0][1].content == req.messages[0].content
+    # 决策输入采用序列化对话数据；用户的模板字符串仍原样保留，不触发二次替换。
+    assert json.loads(primary.decisions[0][1].content) == req.model_dump(mode="json")
     assert primary.responses[0][0].content.startswith("回复标记 ")
     assert {ref.version for ref in events[-1].prompt_refs} == {
         "test-decision",

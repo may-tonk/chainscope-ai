@@ -1,0 +1,96 @@
+/* 输入框的样式（普通输入框和密码框共用）。 */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-2);
+}
+
+.label {
+  font-size: var(--cs-text-sm);
+  font-weight: 500;
+  color: var(--cs-text);
+}
+
+/* 外框：包住输入框和右侧的附加按钮，边框画在这一层，看起来是一个整体。 */
+.control {
+  display: flex;
+  align-items: center;
+  /* 电脑上 42px（2026-10-26 调小）；触屏设备在文件末尾改回 44px，方便手指点中。 */
+  min-height: 42px;
+  background: var(--cs-surface);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.control:hover {
+  border-color: var(--cs-border-strong);
+}
+
+/* 输入框获得焦点时，整个外框显示焦点效果。 */
+.control:focus-within {
+  border-color: var(--cs-green-700);
+  box-shadow: var(--cs-focus-ring);
+}
+
+.invalid,
+.invalid:hover {
+  border-color: var(--cs-danger);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 var(--cs-space-3);
+  border: none;
+  background: transparent;
+  font-size: var(--cs-text-base);
+}
+
+/* 焦点效果已经画在外框上，输入框自身不再画。 */
+.input:focus-visible {
+  box-shadow: none;
+}
+
+.input::placeholder {
+  color: var(--cs-text-faint);
+}
+
+/*
+ * 隐藏 Edge 自带的“显示密码”按钮和清除按钮。
+ * Edge 会在密码框里自动加一个眼睛按钮，和我们自己的眼睛按钮（PasswordField）重复，
+ * 出现两个眼睛（2026-10-26 在 Edge 截图里发现）。保留自己的，样式和行为全站统一。
+ */
+.input::-ms-reveal,
+.input::-ms-clear {
+  display: none;
+}
+
+.hint,
+.error {
+  font-size: var(--cs-text-sm);
+  line-height: 1.5;
+  /* 均衡换行，避免最后一行只剩一两个字。 */
+  text-wrap: pretty;
+}
+
+.hint {
+  color: var(--cs-text-muted);
+}
+
+.error {
+  color: var(--cs-danger);
+}
+
+/* 触屏设备（手机、平板）上加高到 44px：手指比鼠标粗，太小的输入框不容易点中。 */
+@media (pointer: coarse) {
+  .control {
+    min-height: 46px;
+  }
+
+  .input {
+    height: 44px;
+  }
+}

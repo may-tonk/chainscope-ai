@@ -1,6 +1,8 @@
 # 项目目录与模块职责
 
-更新日期：2026-11-10（更新研究主 LLM、配置与四类数据工具；采集业务说明沿用原基线）。命令见 [README](../README.md)，操作步骤见 [运行手册](operations.md)。
+更新日期：2026-11-16（同步已经完成的研究工具、网站主 LLM 聊天与聊天布局；采集业务说明沿用原记录）。命令见 [README](../README.md)，操作步骤见 [运行手册](operations.md)。本次为文档同步，不代表重新执行测试或完成生产验收。
+
+当前状态对应 `feat/research-chat` 工作区：研究与既有网站源码已在同一目录联调，聊天和布局改动尚未提交；仅查看 `HEAD` 或旧分支会漏掉未提交、未跟踪的实现。早期文档中注明日期的分支名称与骨架状态属于历史记录。
 
 ## 目录
 
@@ -10,16 +12,18 @@
 | --- | --- |
 | `python/chainscope` | CLI、采集业务、Agent 和数据库访问代码 |
 | `python/chainscope_research` | 独立研究包：已有主 LLM 单轮决策/流式正文、YAML 配置与提示词、四类只读数据工具；专业 subagent、网站研究接口与持久任务未接通 |
-| `python/webapp` | 网站后端位置；已有认证源码在 `feat/auth-v1` 分支，新增研究接口沿用该入口，不能把当前分支缺少源码理解为功能被删除 |
+| `python/webapp` | 已有 FastAPI 账户/会话接口、主 LLM 聊天 SSE 与聊天配置；使用独立 PostgreSQL 账户库，网站研究执行接口仍未接通 |
 | `python/tests` | 模拟测试、临时 MySQL 测试和可选真实模型检查 |
 | `python/tests/research` | 研究合同、主 LLM、配置、工具执行与失败边界测试，使用 `test_research_` 前缀 |
+| `python/tests/webapp` | 认证、账户、迁移与聊天测试，使用 `test_web_` 前缀 |
 | `python/tools` | 聊天入口、环境检查、测量和手动采集等辅助入口 |
 | `python/migration_env` | Alembic 执行入口 `env.py` |
 | `python/migrations` | 保持连续的迁移版本 `0001`～`0009` |
-| `config` | 代币服务列表、本地身份、地址标签，以及研究模型/运行参数/工具策略/提示词 YAML 登记表 |
+| `config` | 代币服务列表、本地身份、地址标签，以及研究模型/运行参数/工具策略/提示词与网页聊天传输 YAML |
 | `prompts` | 独立 `.txt` 正文；主 Agent 与工具描述统一由 YAML 登记加载，工具描述仍各自保留独立目录；不创建空 subagent 提示词 |
 | `deploy` | API、worker 和 Redis 的部署模板预留；不存秘密或运行数据，本轮不创建虚假的可运行配置 |
-| `frontend/src` | 沿用认证分支的 app、shared、features 布局；研究、报告、地址和方法功能目录已预留，尚未实现 |
+| `frontend/src` | 已有 app、shared、features 分层，认证、账户设置、工作台、真实主 LLM 聊天与研究会话组件；报告、地址和方法功能仍预留 |
+| `frontend/tests` | 认证、账户、研究入口、聊天流协议与交互测试 |
 | `docs` | 当前说明及注明日期的历史设计、学习和验证记录 |
 | `sql` | Navicat 查询及历史初始迁移 SQL 导出 |
 | `samples` | 固定 CSV 样本 |
@@ -32,30 +36,29 @@
 
 根目录保留环境、依赖、迁移和协作工具所需配置。环境、缓存、构建目录和安装元信息从 IDE 日常源码搜索中排除即可，不通过移动解释器整理目录。
 
-## 研究分析目录（骨架始于 2026-11-07）
+## 研究分析目录与实际职责
 
-以下目录已创建，功能文件按后续实施逐步增加。Python 包的 `__init__.py` 只说明用途，不创建模型或连接；其他空目录用 `.gitkeep` 保留。目录存在不表示对应功能已完成。
+目录骨架始于 2026-11-07，现已实现主 LLM、共享合同、四类工具和以下对应文件。Python 包的 `__init__.py` 只说明用途，不创建模型或连接；标为预留的目录仍无对应业务实现。目录存在不表示功能完成。
 
 | 研究包内的位置 | 单一职责 |
 | --- | --- |
 | `core/` | 研究配置、路径、公共错误和脱敏日志 |
-| `contracts/` | 研究请求、指标结果、报告版本、任务状态与流式事件的共享格式 |
-| `model/` | 聊天、向量和重排模型的创建与适配 |
-| `agent/` | 研究图的组装、状态、可信上下文、运行和中间件 |
-| `agent/nodes/` | 澄清、规划、覆盖检查、分析、校验和回答等图节点 |
+| `contracts/` | 已有研究草稿、对象/时间、工具输入输出、发现/总结草稿、调用关联与主 LLM 流事件的 Pydantic 合同；合同不代替任务或报告实现 |
+| `model/` | 已有 DeepSeek 决策/正文适配与有预算的主备切换；向量与重排模型未实现 |
+| `agent/` | 已有 `main_graph.py` 的单轮异步决策/校验图和工具薄适配；专业 subagent 调度未实现 |
+| `agent/nodes/` | 专业研究节点预留；当前实际决策与校验节点在 `agent/main_graph.py` |
 | `agent/tools/` | 给模型调用的薄接口，不重复实现业务或指标公式 |
-| `services/` | 清洗批次、指标查询、地址、对话、报告和任务的业务规则 |
-| `analysis/cleaning/` | 事件校验、转账分类、交易合并与归属、结果对账 |
-| `analysis/metrics/` | 指标登记、供应、资金流、持仓和时段比较；口径在此统一维护 |
-| `knowledge/` | 文档解析与入库、检索、重排及来源引用 |
-| `storage/` | MySQL、研究 PostgreSQL、Redis、checkpoint、向量与对象存储的连接和访问适配 |
-| `storage/repositories/` | 链上事实、派生结果、会话、报告、任务与地址标签的数据访问 |
-| `tasks/` | 后台任务与 worker 入口；目录创建不会注册任务或启动进程 |
+| `services/` | 已有数据工具服务、签名事件游标和单轮取消控制；持久研究任务与报告服务未实现 |
+| `analysis/cleaning/` | 已有 uint256 原值校验与 Transfer 互斥分类，不表示全部清洗方法已完成 |
+| `analysis/metrics/` | 已有活动计数、分类金额、地址贡献和精确时段比较；不输出价格归因、余额或利润结论 |
+| `knowledge/` | 文档检索、重排及来源引用预留，RAG 未实现 |
+| `storage/`、`storage/repositories/` | 已有 `chain_facts.py` 的 MySQL 只读事实访问；研究结果、会话、报告、Redis、checkpoint 等存储未实现 |
+| `tasks/` | 研究后台任务与 worker 预留；不等于原有采集包的后台执行未实现 |
 | `migrations/versions/` | 研究业务迁移预留，目标数据库、权限和迁移合同确认后再编写；不替代现有 MySQL 或账户迁移链 |
 
-`application.py` 已提供主 Agent 流入口及分析服务公开类型，`bootstrap.py` 负责资源组装。网站沿 `api → services → chainscope_research.application` 方向接入；研究包不反向依赖网站。分析服务构造必须显式注入服务端权限解析器和分页签名密钥，不在启动时迁移或建表。
+`application.py` 已提供主 Agent 流入口及分析服务公开类型，`bootstrap.py` 负责资源组装。网站聊天沿 `api → services → MainAgentApplication` 方向接入；研究包不反向依赖网站。分析工具服务另行构造，必须显式注入服务端权限解析器和分页签名密钥；真实网站数据授权源尚未注入，不在启动时迁移或建表。
 
-前端沿用 `app/layouts`、`shared/{api,format,styles,ui,validation}` 和 `features`；已有 `auth`、`account`、`workspace` 的代码以认证分支为准，新增 `research`、`reports`、`addresses`、`methods` 分别预留页面和组件。两大产品模块仍是独立的“AI 研究”和“我的报告”。
+前端沿用 `app/layouts`、`shared/{api,format,styles,ui,validation}` 和 `features`；`auth`、`account`、`workspace` 与 `research` 实现在当前工作区，`reports`、`addresses`、`methods` 仍预留。“AI 研究”和“我的报告”是不同产品入口，报告尚不可执行。
 
 本地入口继续放 `python/tools/`；研究配置放 `config/research_*.yaml`。主 LLM 配置由 `core/config_schema.py` 定义、`core/settings.py` 加载；工具策略由 `core/tool_settings.py` 定义与加载。类型均由 Pydantic 维护，实际参数来自 YAML；采集已有 TOML 与项目 `pyproject.toml` 保持原用途。完整消息、图状态和报告版本的存储分别设计，不能把缓存或 checkpoint 当作全部业务记录。
 
@@ -66,6 +69,34 @@
 `config/research_tools.yaml` 管理每实例并行度、每时段行数、时段数、证据样例、地址贡献数量和工具时限；修改后重新装配生效。同步 PyMySQL 查询和整数计算在有界线程运行，异步入口不阻塞事件循环；超时不意味着数据库已停止，槽位待线程真实结束才归还。单实例并行上限不能当作跨进程限流或上线容量证据。
 
 `python/tools/check_research_data_tools.py --job-id bem --hours 1` 在本地数据库权限下只读验收四个实际 `StructuredTool.ainvoke`，并以独立 JOIN 和整数计算对照结果；不调用模型、RPC、迁移或重采，也不自动落盘。该本地操作者身份不能用作网站账户授权实现。
+
+## 已接通的网站聊天
+
+```text
+/research/new → ChatPage → useChat → api/chat.ts → shared/api/client.ts
+             → POST /api/chat/turn（Cookie、CSRF 和来源检查）
+             → webapp.services.chat.ChatService
+             → MainAgentApplication → LangGraph decide/validate → DeepSeek 正文流
+             → EventSourceResponse → SSE 解析与页面增量显示
+```
+
+`python/webapp/app.py` 装配账户、重置密码与聊天路由。`api/routes_chat.py` 从认证会话取可信 user_id，浏览器只提交 user/assistant 文本；`services/chat.py` 懒加载并复用模型资源，为每轮隔离控制器与事件流，并在发布事件前按间隔复核会话。已有限制并发、心跳、写出超时、断连取消与资源清理；这些是当前实例的运行边界，不是跨 worker 预算或完整研究中间件。
+
+`MainTurnRequest` 仍由同一 Pydantic 合同定义。决策阶段把带角色的历史作为序列化对话数据交给模型，正文阶段保留真实角色；`main_decision` 提示词版本为 2。主模型和备用模型共享既定单轮预算，已有正文后不拼接另一模型答案。`reply`、`clarify` 可以正常形成回复；`delegate` 只返回 `not_connected`，不会实际启动专业任务。
+
+`ChatPage.tsx` 与 `ChatPage.module.css` 负责消息独立滚动、底部输入和跟随意图，外壳通过 `RouteHandle.layout` 选择聊天布局。`useChat.ts` 处理多轮、停止、重试和过期回调隔离，`api/chat.ts` 检查 SSE 字节拆分、标识、序号与终态。对话只保留在当前页面内存；刷新、离页、新建或切换账户后清空。`/research/:sessionId` 仍使用默认 `service=null` 的研究会话适配器，已有组件和合同不代表持久研究服务已接通。
+
+| 配置文件 | 已有用途 |
+| --- | --- |
+| `config/research_models.yaml` | 主备模型、决策/正文生成参数与单次请求设置 |
+| `config/research_runtime.yaml` | 单轮时间、输入输出和尝试预算 |
+| `config/research_prompts.yaml` | TXT 提示词与工具描述的名称、版本、路径和变量登记 |
+| `config/research_tools.yaml` | 只读工具执行策略 |
+| `config/web_chat.yaml` | 网站聊天实例/用户并发、历史条数、SSE 心跳与写出超时、会话复核间隔；由 `webapp/core/chat_settings.py` 校验加载 |
+
+模型实际配置可被允许的环境变量覆盖，配置修改后须重新装配/重启，不是热更新。网站登录不能代替数据集授权；三个专业 subagent、网页工具执行、报告与持久任务仍未接通。开发账户邮件只有控制台模式，生产邮件、生产账户库装配和上线验收均未完成。
+
+2026-11-15 最近验收记录：前端 150 项通过；Python 475 项通过、221 项跳过，另有 5 个子测试通过；研究包 Mypy 42 个源文件通过，已检查范围 Ruff 通过。真实模型聊天和长消息布局分别验证，合成 SSE 不作为真实分析证据；完整记录见 [数据分析方案第 27～29 节](data-analysis-agent-design.md)。本次文档同步不重复测试。
 
 ## 当前采集流程
 
@@ -102,7 +133,7 @@
 | `balances.py`、`holders.py`、`query.py`、`market.py` | 持仓缓存、排行、范围查询及行情等已有 CLI 功能 |
 | `recovery.py`、`formal_recovery.py` | 显式核验或修复；采集 Agent 不开放这些操作 |
 
-`collect` 是早期小范围批次工具，其事件不属于长期任务；日常增量使用 `sync` 或采集 Agent。行情、研究分析和长期 memory 尚未接入 Agent。
+`collect` 是早期小范围批次工具，其事件不属于长期任务；日常增量使用 `sync` 或采集 Agent。行情、研究分析和长期 memory 尚未接入该采集 Agent；这不表示独立研究工具和网站主 LLM 聊天仍是骨架。
 
 ## 保存与验证边界
 

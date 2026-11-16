@@ -1,0 +1,9 @@
+# 网页聊天传输与每个 API 实例的资源限制。
+# 模型及整轮参数仍来自 research_models.yaml、research_runtime.yaml，不在这里重复维护。
+# 修改后重启网站服务生效，不保存对话历史，不在这里填写任何凭证。
+max_parallel_turns: 8  # 当前 API 实例同时等待模型的上限；不是跨进程全站限流。
+max_turns_per_user: 2  # 给用户停止旧回复后立即继续提问留出收尾空间。
+max_messages: 100  # 单次请求携带的当前页面历史条数上限，超过时让用户新建对话。
+heartbeat_seconds: 10  # SSE 心跳周期，避免等待决策时连接长期无输出。
+send_timeout_seconds: 10  # 浏览器持续不读取响应时结束连接并回收上游等待。
+reauth_seconds: 15  # 发布新内容前重新校验登录会话的最大间隔。

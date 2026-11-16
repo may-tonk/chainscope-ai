@@ -1,8 +1,23 @@
-# ChainScope 采集 CLI 与本地 Agent
+# ChainScope 链上采集、数据工具与研究聊天
 
 基于 Python、Alchemy、SQD 和 MySQL 的 BSC 数据采集项目。支持 CLI 和 DeepSeek 本地对话入口，保存标准 Transfer、配置范围内的池子与 Swap，并维护连续进度和持仓缓存。输入明确采集范围后，程序完成分页、检查、事务入库和结果报告，为后续研究与查询提供数据。
 
-当前包含数据采集 CLI 与本地对话采集 Agent。实际采集规模、截止位置和数据核对结果以对应运行记录为准；本地运行不代表已经完成网站部署或所有来源、事件类型的覆盖验收。
+当前包含数据采集 CLI、本地对话采集 Agent、四类只读数据工具，以及带账户认证的网页主 LLM 聊天。研究模块使用 LangChain/LangGraph，与原有采集 Agent 分开；三个专业 subagent、网页研究工具执行和报告链路尚未接通。实际采集规模、截止位置和数据核对结果以对应运行记录为准；本地运行不代表已经完成网站部署或所有来源、事件类型的覆盖验收。
+
+## 当前实施状态
+
+2026-11-16 文档同步：以下状态对应 `feat/research-chat` 当前工作区，包含尚未提交的网站与聊天改动；不能仅依据 `HEAD` 或远程仓库判断本地完成情况。
+
+| 模块 | 已实现范围 | 当前边界 |
+| --- | --- | --- |
+| 采集 CLI 与本地 Agent | 固定范围采集、事务入库、连续水位、恢复及结束报告 | 单机本地操作者；规模验收以实际记录为准 |
+| 四类研究工具 | 交易/区块事件查询、地址/代币活动分析；授权接口、精确计算和证据引用 | 执行层已实现，尚未由网页和专业 subagent 调用 |
+| 网站账户 | 注册、登录、密码相关操作、会话与账户设置 | 开发邮件为控制台模式；生产邮件与生产账户库装配未完成 |
+| 网页主 LLM 聊天 | 真实 SSE 正文、多轮追问、停止、打断与手动重试；已调整聊天布局 | 仅当前页面保留对话；研究分派仍为 `not_connected` |
+
+最近验收记录（2026-11-15）：前端 150 项通过，Lint、TypeScript 和构建通过；Python 475 项通过、221 项跳过，另有 5 个子测试通过；研究包 Mypy 检查 42 个源文件通过，已检查范围的 Ruff 通过。真实浏览器完成登录、流式回复、追问、停止、重试和布局验证。跳过项不算已执行，样例验证不代表生产容量；本次文档同步没有重新运行测试。
+
+详细范围见 [数据分析与多 Agent 方案第 27～29 节](docs/data-analysis-agent-design.md#27-四类数据工具执行交付2026-11-10待用户检查)、[模块职责](docs/architecture.md)和[本地网站启动说明](docs/operations.md#网站主-llm-聊天本地开发)。
 
 ## 已实现功能
 
@@ -16,11 +31,11 @@
 
 ## 技术栈
 
-Python 3.12、httpx、SQLAlchemy Core、PyMySQL、Alembic、pytest、Ruff、uv。采集主流程采用同步 httpx；对话入口使用 OpenAI Agents SDK 和 DeepSeek。Web3.py 与分析/API 工具已作为依赖预备，研究分析与网站接口尚未接入 Agent。
+Python 3.12、httpx、SQLAlchemy Core、PyMySQL、Alembic、pytest、Ruff、uv。采集主流程采用同步 httpx，采集对话入口使用 OpenAI Agents SDK 和 DeepSeek；独立研究模块使用 LangChain、LangGraph、DeepSeek 和 Pydantic。网站为 React＋TypeScript＋Vite、FastAPI 和 SSE；链上事实保存在 MySQL，账户与会话保存在独立 PostgreSQL。Web3.py 等已安装工具不代表对应能力已接入业务。
 
 ## 本地采集 Agent
 
-采集 Agent 使用 OpenAI Agents SDK 和 DeepSeek Chat Completions 接口，复用已有采集流程。模型选择工具；本地程序校验参数、授权、任务互斥和固定截止位置。行情、研究分析和长期 memory 尚未接入。
+采集 Agent 使用 OpenAI Agents SDK 和 DeepSeek Chat Completions 接口，复用已有采集流程。模型选择工具；本地程序校验参数、授权、任务互斥和固定截止位置。行情、研究分析和长期 memory 尚未接入该采集 Agent；网页研究聊天使用独立入口，不直接包装本地采集对话程序。
 
 ```powershell
 uv sync --all-extras --locked
@@ -228,4 +243,4 @@ raw/                可选调试归档，运行时创建，不提交
 - `sync` 已实现持久化进度、自动续跑、连续水位、本地检查、独立买卖覆盖及可显式执行的跨源复查；已最终确认区块的冲突只记录并停止，不自动修复；规模验收需在真实数据上按运行手册完成。
 - 回执对照验证返回事件，不能证明供应商没有遗漏；金额总和是读回计算，不是独立完整性对账。
 - `collect` 的结束区块要求至少 12 个后续区块，只是链头避让规则，不构成最终性证明；`sync` 用的是最终确认高度。
-- 当前提供 BSC CLI 和服务列表内代币的本地采集 Agent，一次操作一个明确代币和固定终点。研究分析、长期 memory、网站接口和公网多用户部署尚未接入 Agent。
+- 本地采集 Agent 一次操作一个明确代币和固定终点，不向网站账户开放采集控制权限。网站已接通独立主 LLM 聊天，但专业 subagent、网站工具/数据集授权映射、真实研究执行、研究报告、Redis、持久聊天历史和记忆/RAG 尚未接通；生产部署与容量验收未完成。

@@ -36,6 +36,18 @@ def model_messages(system: str, request: MainTurnRequest) -> list[BaseMessage]:
     ]
 
 
+def decision_messages(system: str, request: MainTurnRequest) -> list[BaseMessage]:
+    """把带角色的对话序列化为决策输入数据，避免模型模仿历史助手的正文格式。
+
+    决策阶段只分类本轮需求；正文阶段仍使用 model_messages 保留原始对话角色。
+    所有历史内容由 Pydantic 序列化并转义，用户文本不会被提升为系统指令。
+    """
+    return [
+        SystemMessage(content=system),
+        HumanMessage(content=request.model_dump_json()),
+    ]
+
+
 def build_main_graph(model: MainModel, decision_prompt: LoadedPrompt):
     """绑定实际模型与提示词，返回可异步调用的图；不在构造时请求供应商。"""
     system = decision_prompt.render(
@@ -45,7 +57,7 @@ def build_main_graph(model: MainModel, decision_prompt: LoadedPrompt):
     async def decide(state: MainState) -> dict:
         """根据当前历史调用模型；控制器允许新消息在供应商等待期间打断旧轮。"""
         raw = await state["control"].run(
-            model.decide(model_messages(system, state["request"]))
+            model.decide(decision_messages(system, state["request"]))
         )
         return {"raw_decision": raw}
 

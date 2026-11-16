@@ -1,0 +1,143 @@
+/*
+ * 认证外壳的样式：宽屏左右各占一半；窄屏（< 900px）只显示右侧表单。
+ */
+
+.shell {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 100vh;
+}
+
+/* ── 左侧品牌介绍 ── */
+.brandPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-10);
+  padding: var(--cs-space-10) var(--cs-space-12);
+  background: var(--cs-sidebar);
+  border-right: 1px solid var(--cs-border);
+}
+
+.logo,
+.mobileLogo {
+  font-size: var(--cs-text-xl);
+  font-weight: 700;
+  color: var(--cs-green-700);
+}
+
+/*
+ * margin-top: auto 和下方 .note 的 margin-top: auto 一起，把“口号 + 功能介绍”放在
+ * Logo 与底部小字之间的正中；再配合 .highlights 底部多留的 8vh，与右侧表单一样略高于正中。
+ * 这样无论屏幕多高，左右两块内容的高度大致对齐（2026-10-26：1920×1080 下原来左上右中，显得脱节）。
+ */
+.intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-4);
+  margin-top: auto;
+}
+
+.eyebrow {
+  font-size: var(--cs-text-xs);
+  letter-spacing: 0.18em;
+  color: var(--cs-text-muted);
+}
+
+.hero {
+  font-family: var(--cs-font-serif);
+  font-size: var(--cs-text-hero);
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--cs-text);
+}
+
+.subtitle {
+  font-size: var(--cs-text-lg);
+  color: var(--cs-text-muted);
+}
+
+.highlights {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cs-space-5);
+  max-width: 460px;
+  margin: 0 0 8vh;
+  padding: 0;
+  list-style: none;
+}
+
+.highlight {
+  display: flex;
+  gap: var(--cs-space-3);
+}
+
+.highlightIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--cs-radius);
+  background: var(--cs-green-50);
+  color: var(--cs-green-700);
+}
+
+.highlightTitle {
+  font-weight: 600;
+}
+
+.highlightText {
+  font-size: var(--cs-text-sm);
+  color: var(--cs-text-muted);
+}
+
+.note {
+  margin-top: auto;
+  font-size: var(--cs-text-xs);
+  color: var(--cs-text-faint);
+}
+
+/* ── 右侧表单区 ── */
+.formPanel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 底部比顶部多留 8vh（窗口高度的 8%），表单整体略高于正中。
+   * 严格居中时视觉上偏低；略高于正中是常见的“视觉中心”，也和左侧大标题的高度更协调
+   * （2026-10-26 用户要求把登录块调小、放到更合理的位置）。 */
+  padding: var(--cs-space-10) var(--cs-space-6) calc(var(--cs-space-10) + 8vh);
+  background: var(--cs-surface);
+}
+
+/* 表单宽度 360px：原来 400px 在右半边显得输入框和按钮过长、笨重。 */
+.formArea {
+  width: 100%;
+  max-width: 360px;
+}
+
+/* 宽屏上左侧已有 Logo，表单上方的不显示。 */
+.mobileLogo {
+  display: none;
+  margin-bottom: var(--cs-space-8);
+}
+
+@media (max-width: 899px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .brandPanel {
+    display: none;
+  }
+
+  .mobileLogo {
+    display: block;
+  }
+
+  /* 手机两侧各留 16px；表单从顶部开始排，不垂直居中（软键盘弹出时不跳动）。 */
+  .formPanel {
+    align-items: flex-start;
+    padding: var(--cs-space-10) var(--cs-space-4);
+  }
+}

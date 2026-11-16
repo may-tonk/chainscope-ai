@@ -7,7 +7,7 @@ prompts:
     # 相对项目根目录；仅允许解析后仍位于项目 prompts/ 内的 .txt 文件。
     file: prompts/agents/main/decision.txt
     # 人工维护的提示词版本；修改正文时同步更新。程序另算内容 SHA-256 便于核对。
-    version: "1"
+    version: "2"
     # 必需变量名称，需与正文 {{变量名}} 一致；不是本轮实际参数值。
     required_variables:
       # 由 MainDecision.model_json_schema() 生成并序列化，不能手写第二份 Schema。

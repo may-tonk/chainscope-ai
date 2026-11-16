@@ -1,10 +1,42 @@
-# 运行与验收手册（本地 Agent 与 CLI）
+# 运行与验收手册（本地采集与网站聊天）
 
-更新日期：2026-10-19。命令在项目根目录的 PowerShell 执行。下文 `cs` 是 CLI 简写，可在当前终端定义：
+更新日期：2026-11-16（网站账户与主 LLM 聊天开发入口；采集操作沿用既有范围）。命令在项目根目录的 PowerShell 执行。下文 `cs` 是 CLI 简写，可在当前终端定义：
 
 ```powershell
 function cs { & .\.venv\Scripts\python.exe -B -m chainscope @args }
 ```
+
+## 网站主 LLM 聊天（本地开发）
+
+这是已完成联调的开发入口，和下文的本地采集 Agent 分开。前置条件：项目自身 `.venv` 与 `frontend` 依赖已就绪，虚拟机 PostgreSQL 账户库可连接并已有对应结构，现有 `.env`/环境中已配置 `WEBAPP_*`、`AUTH_*` 和研究模型凭证。网页聊天不执行 MySQL 研究工具；登录成功不代表数据集授权已接通。秘密仅由现有配置读取，不放入命令或文档。
+
+在项目根目录的一个 PowerShell 终端启动后端：
+
+```powershell
+.\.venv\Scripts\python.exe -B python/tools/run_webapp.py
+```
+
+另开一个以项目根目录为当前位置的终端启动前端：
+
+```powershell
+Set-Location frontend
+npm run dev
+```
+
+后端监听 `127.0.0.1:8000`，前端固定 `localhost:5173`，Vite 将 `/api` 转发到后端；端口已占用时应先核对已有服务，不重复启动。浏览器使用 [工作台](http://localhost:5173/)或 [AI 对话](http://localhost:5173/research/new)，通过已有账户登录；不要换成 `127.0.0.1:5173`，默认来源检查使用 `http://localhost:5173`。使用项目根目录的 `.venv`，不要误用父目录中的环境。
+
+聊天支持真实流式回复、当前页追问、停止、打断和手动重试。Enter 发送，Shift+Enter 换行，中文输入法确认候选词不发送。消息独立滚动，输入框常驻；向上阅读时不自动拉回，窗口变化时维护原跟随意图。刷新、离页、新建对话或切换账户会清空当前页对话，不提供历史恢复。
+
+| 配置 | 对应已实现职责 |
+| --- | --- |
+| `config/research_models.yaml`、`config/research_runtime.yaml` | 主备模型、生成参数和单轮预算 |
+| `config/research_prompts.yaml`、`prompts/` | 提示词登记和独立 TXT 正文；决策模板版本为 2 |
+| `config/web_chat.yaml` | 网页聊天实例/用户并发、历史条数、心跳、写出超时和发布事件前的登录复核间隔 |
+| `config/research_tools.yaml` | 已实现只读数据工具的执行策略，尚未用于网页研究调度 |
+
+模型配置允许指定环境变量覆盖，修改 YAML/TXT 后需重新装配/重启对应服务，不是热更新。后端启动不自动迁移或建表；开发注册/重置验证码输出到后端终端，不能当成生产邮件。生产账户库装配与公网部署未完成，不将 Vite 开发服务对公网发布。三个专业 subagent、网站数据授权与工具执行、报告和持久任务的边界见 [数据分析方案第 27～29 节](data-analysis-agent-design.md)。
+
+最近验收记录（2026-11-15）：真实浏览器登录、流式回复、追问、停止、重试及布局验证通过；前端 150 项通过，Lint、类型检查、构建通过；Python 475 项通过、221 项跳过，另有 5 个子测试通过。长消息布局使用明确标记的合成 SSE，窗口尺寸验证不代替真实手机软键盘或生产容量验收。本次文档更新不重新运行上述验收。
 
 ## 本地采集 Agent
 
