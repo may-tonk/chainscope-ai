@@ -1,0 +1,60 @@
+# 用途：仅部署 ChainScope Memory 的 Qdrant，凭证和数据保存在 Linux 服务目录。
+# 端口绑定 Linux 回环地址，由受校验的 SSH 转发提供给 Windows 开发进程。
+name: chainscope-memory
+
+services:
+  qdrant:
+    # 固定官方发布的多平台内容摘要；本环境实际拉取 linux/amd64。
+    image: qdrant/qdrant:v1.20.1@sha256:d18c8e5061be3eaea2f53fbee1f0bf0382dc59cbb9b7112e41ffcc937ec14220
+    container_name: chainscope-memory-qdrant
+    # 安装器核对 hadoop UID 后准备同 UID 数据目录，容器不以 root 运行。
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # 这是初始资源上限，不是吞吐承诺；memswap_limit 相同表示不额外分配容器 Swap。
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 2
+    # 给进程正常退出和刷盘留出时间；不会把强制终止当作备份或恢复演练。
+    stop_grace_period: 45s
+    entrypoint: [/qdrant/qdrant, --config-path, /qdrant/config/memory.yaml]
+    # 仅发布 REST，客户端通过 SSH 进入；服务器证书包含内网地址不等于开放内网监听。
+    ports:
+      - "127.0.0.1:6333:6333"
+    # 此文件由准备工具生成，权限 0600；禁止放入 Git。
+    env_file: ./secrets/qdrant.env
+    # 配置和证书只读；运行数据和快照分别落盘，缺少宿主机目录时明确失败。
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /qdrant/config/memory.yaml
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./certificates
+        target: /qdrant/tls
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./storage
+        target: /qdrant/storage
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./snapshots
+        target: /qdrant/snapshots
+        bind: {create_host_path: false}
+    # 临时目录不持久化，且受容器内存预算约束；正式数据必须写入挂载目录。
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+    healthcheck:
+      # 镜像没有 curl：这里只检查监听；TLS、认证和查询由外部验收工具核对。
+      test: [CMD, /bin/bash, -ec, "exec 3<>/dev/tcp/127.0.0.1/6333"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

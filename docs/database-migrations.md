@@ -1,6 +1,6 @@
 # 数据库迁移
 
-更新日期：2026-11-16（独立网站账户迁移说明）。采集 MySQL 迁移脚本最新为 `0009`，网站 PostgreSQL 账户迁移脚本最新为 `0002`；两套版本链独立。本文说明代码中的迁移，不代表在线数据库当前版本。Navicat 继续用于查看和核对。
+更新日期：2026-11-16（账户迁移说明与 Memory 基础设施初始化）。当前采集 MySQL 迁移脚本最新为 `0009`，网站 PostgreSQL 账户迁移脚本最新为 `0002`；本次没有执行或修改这两套迁移链。Memory 小节记录实际执行的独立 schema 与 checkpoint 初始化。Navicat 继续用于查看和核对。
 
 ## 执行入口
 
@@ -39,6 +39,18 @@
 | `0002` | 验证表增加密码重置用途、关联用户、外键/用途约束和索引 |
 
 账户迁移使用独立迁移账号；普通运行账号用于网站日常读写。已实现的迁移入口检查目标库、账号、schema 权限与 TLS，拒绝超级管理员；账户 downgrade 仅允许测试库。网站启动不自动建表或升级，生产账户库装配与部署仍未完成。账户迁移不放入 `python/migrations/0001`～`0009`，也不代表研究会话、报告或任务已有迁移；研究业务迁移仍预留。
+
+## Memory 基础设施初始化
+
+`python/tools/prepare_memory_database.py --apply` 是独立的显式环境准备入口，使用现有 development/test profile 及各自迁移账号，校验目标库、非超级用户和 TLS 后创建 `research`、`research_checkpoint` 两个 schema。已有 schema 的所有者不匹配时拒绝接管。运行账号仅取得 schema USAGE、业务表读写与必要序列权限，不取得 CREATE 权限。
+
+`research` 暂为空，聊天与记忆业务表仍待后续独立 Alembic 迁移；`research_checkpoint` 使用锁定的 `langgraph-checkpoint-postgres 3.2.0` 官方 `PostgresSaver.setup()` 显式初始化，其 `checkpoint_migrations` 与账户 `public.alembic_version` 独立。内部并发索引迁移使用独立 autocommit 连接，不放进聊天业务事务，网站启动不调用 setup。
+
+```powershell
+.\.venv\Scripts\python.exe -B python/tools/prepare_memory_database.py --apply
+```
+
+2026-11-16 已在开发、测试两套库执行，运行账号的检查点写入、关闭连接后重新读取和测试 thread 清理通过，DDL 权限保持 false。未升级 PostgreSQL（仍为 18.6），未安装 pgvector，未修改 MySQL 原始事实或账户表结构。
 
 ## 保留与兼容
 

@@ -1,8 +1,8 @@
 # 项目目录与模块职责
 
-更新日期：2026-11-16（同步已经完成的研究工具、网站主 LLM 聊天与聊天布局；采集业务说明沿用原记录）。命令见 [README](../README.md)，操作步骤见 [运行手册](operations.md)。本次为文档同步，不代表重新执行测试或完成生产验收。
+更新日期：2026-11-16（研究工具、网站主 LLM 聊天、聊天布局与 Memory 基础设施）。命令见 [README](../README.md)，操作步骤见 [运行手册](operations.md)。测试与环境验证的范围分别记录，不代表生产验收完成。
 
-当前状态对应 `feat/research-chat` 工作区：研究与既有网站源码已在同一目录联调，聊天和布局改动尚未提交；仅查看 `HEAD` 或旧分支会漏掉未提交、未跟踪的实现。早期文档中注明日期的分支名称与骨架状态属于历史记录。
+当前状态对应 `feat/research-chat` 分支：研究、网站与聊天源码已经整合，Memory 部署和环境验收工具一并维护。早期文档中注明日期的分支名称与骨架状态属于历史记录。
 
 ## 目录
 
@@ -21,7 +21,7 @@
 | `python/migrations` | 保持连续的迁移版本 `0001`～`0009` |
 | `config` | 代币服务列表、本地身份、地址标签，以及研究模型/运行参数/工具策略/提示词与网页聊天传输 YAML |
 | `prompts` | 独立 `.txt` 正文；主 Agent 与工具描述统一由 YAML 登记加载，工具描述仍各自保留独立目录；不创建空 subagent 提示词 |
-| `deploy` | API、worker 和 Redis 的部署模板预留；不存秘密或运行数据，本轮不创建虚假的可运行配置 |
+| `deploy` | Redis 与 Qdrant 的无秘密部署模板；证书、凭证、运行数据放在仓库外，API 和业务 worker 的生产部署仍待完成 |
 | `frontend/src` | 已有 app、shared、features 分层，认证、账户设置、工作台、真实主 LLM 聊天与研究会话组件；报告、地址和方法功能仍预留 |
 | `frontend/tests` | 认证、账户、研究入口、聊天流协议与交互测试 |
 | `docs` | 当前说明及注明日期的历史设计、学习和验证记录 |
@@ -52,11 +52,13 @@
 | `analysis/cleaning/` | 已有 uint256 原值校验与 Transfer 互斥分类，不表示全部清洗方法已完成 |
 | `analysis/metrics/` | 已有活动计数、分类金额、地址贡献和精确时段比较；不输出价格归因、余额或利润结论 |
 | `knowledge/` | 文档检索、重排及来源引用预留，RAG 未实现 |
-| `storage/`、`storage/repositories/` | 已有 `chain_facts.py` 的 MySQL 只读事实访问；研究结果、会话、报告、Redis、checkpoint 等存储未实现 |
+| `storage/`、`storage/repositories/` | 已有 `chain_facts.py` 的 MySQL 只读事实访问；会话、报告和记忆业务存储尚未接线，外部 checkpoint 表与检索环境已单独初始化 |
 | `tasks/` | 研究后台任务与 worker 预留；不等于原有采集包的后台执行未实现 |
-| `migrations/versions/` | 研究业务迁移预留，目标数据库、权限和迁移合同确认后再编写；不替代现有 MySQL 或账户迁移链 |
+| `migrations/versions/` | 研究业务迁移预留；已有 PostgreSQL `research` 与 `research_checkpoint` 环境，业务表仍按独立迁移实施，不替代 MySQL 或账户迁移链 |
 
 `application.py` 已提供主 Agent 流入口及分析服务公开类型，`bootstrap.py` 负责资源组装。网站聊天沿 `api → services → MainAgentApplication` 方向接入；研究包不反向依赖网站。分析工具服务另行构造，必须显式注入服务端权限解析器和分页签名密钥；真实网站数据授权源尚未注入，不在启动时迁移或建表。
+
+Memory 环境由 `config/memory_services.yaml`、`deploy/qdrant/` 和 `python/tools/*memory*.py` 维护。工具分别负责私有材料准备、数据库显式初始化、检索/Embedding 验收和 SSH 转发；部分命令会写入结构、测试数据或配置，副作用在文件头和函数注释中说明。网站当前不自动调用这些工具；检索环境与 checkpoint 表可用不等于聊天持久化或长期记忆业务已完成。
 
 前端沿用 `app/layouts`、`shared/{api,format,styles,ui,validation}` 和 `features`；`auth`、`account`、`workspace` 与 `research` 实现在当前工作区，`reports`、`addresses`、`methods` 仍预留。“AI 研究”和“我的报告”是不同产品入口，报告尚不可执行。
 

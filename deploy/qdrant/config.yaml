@@ -1,0 +1,29 @@
+# 用途：单节点 Memory 检索服务；正文全文索引与向量索引在集合初始化时显式创建。
+log_level: INFO
+telemetry_disabled: true
+storage:
+  # 两个目录均由 Compose 挂载；同机快照目录不等于异机备份。
+  storage_path: /qdrant/storage
+  snapshots_path: /qdrant/snapshots
+  temp_path: /qdrant/storage/tmp
+  on_disk_payload: true
+  performance:
+    # 与 2 CPU 配额配合，避免默认并行度按宿主机核心数扩张。
+    max_search_threads: 2
+    optimizer_cpu_budget: 2
+  optimizers:
+    max_optimization_threads: 1
+service:
+  # 这是容器内部监听；宿主机是否对外发布由 Compose 的端口绑定决定。
+  host: 0.0.0.0
+  http_port: 6333
+  grpc_port: null  # 当前客户端使用 REST，关闭未使用的 gRPC 接口。
+  enable_cors: false
+  enable_tls: true
+  max_request_size_mb: 8
+tls:
+  # API Key 由私有 env_file 注入，不写入此可提交配置；客户端仍需验证独立 CA。
+  cert: /qdrant/tls/server.crt
+  key: /qdrant/tls/server.key
+cluster:
+  enabled: false  # 当前为单节点开发环境，不表示已经具有副本或生产高可用。

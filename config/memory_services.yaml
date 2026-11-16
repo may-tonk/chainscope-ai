@@ -1,0 +1,32 @@
+# 用途：Memory 基础服务的非秘密连接合同；业务记忆流程将在后续步骤接入。
+# 凭证由环境或用户私有运行目录读取，不在 YAML 中保存真实值。
+qdrant:
+  # 实际服务在 Linux；此回环地址由 SSH 转发到 Linux 的回环监听。
+  url: https://127.0.0.1:6333
+  # 私有 JSON 保存 CA 路径和读写 Key；${LOCALAPPDATA} 是调用方需要展开的路径占位符。
+  connections_file: '${LOCALAPPDATA}/ChainScope/memory/connections.json'
+  server_version: 1.20.1
+  image_digest: sha256:d18c8e5061be3eaea2f53fbee1f0bf0382dc59cbb9b7112e41ffcc937ec14220
+  collection_prefix: chainscope_memory
+  collections:
+    # 两套业务集合分别初始化，验收样例另用随机集合，不向这里写入合成记忆。
+    development: chainscope_memory_dev_v1
+    test: chainscope_memory_test_v1
+  # 模型、维度、分词或索引规则改变时需新建版本并重建，不能混用旧向量。
+  index_revision: text-v4-1024-bm25-multilingual-v1
+embedding:
+  provider: dashscope
+  # 保存变量名称而不保存真实值；是否有免费额度由云端账号和模型决定。
+  api_key_env: DASHSCOPE_API_KEY
+  base_url_env: DASHSCOPE_BASE_URL
+  model: text-embedding-v4
+  dimensions: 1024
+  encoding_format: float
+  timeout_seconds: 30
+  sdk_max_retries: 0  # 后续业务层统一计数，避免 SDK 与任务队列叠加重试预算。
+postgresql:
+  # 研究业务表与图执行快照各有用途；schema 存在不表示网站已接入持久化。
+  business_schema: research
+  checkpoint_schema: research_checkpoint
+  # 复用现有 development/test profile，继续 TLS verify-full、运行与迁移账号分离。
+  profiles: [development, test]

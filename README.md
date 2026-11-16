@@ -6,7 +6,7 @@
 
 ## 当前实施状态
 
-2026-11-16 文档同步：以下状态对应 `feat/research-chat` 当前工作区，包含尚未提交的网站与聊天改动；不能仅依据 `HEAD` 或远程仓库判断本地完成情况。
+2026-11-16：以下状态对应 `feat/research-chat` 分支，网站、聊天与 Memory 基础设施已在该分支整合。环境联通、业务接线和生产验收分别记录。
 
 | 模块 | 已实现范围 | 当前边界 |
 | --- | --- | --- |
@@ -14,8 +14,9 @@
 | 四类研究工具 | 交易/区块事件查询、地址/代币活动分析；授权接口、精确计算和证据引用 | 执行层已实现，尚未由网页和专业 subagent 调用 |
 | 网站账户 | 注册、登录、密码相关操作、会话与账户设置 | 开发邮件为控制台模式；生产邮件与生产账户库装配未完成 |
 | 网页主 LLM 聊天 | 真实 SSE 正文、多轮追问、停止、打断与手动重试；已调整聊天布局 | 仅当前页面保留对话；研究分派仍为 `not_connected` |
+| Memory 基础设施 | Qdrant 关键词/向量混合检索、DashScope 向量接口、PostgreSQL checkpoint 表与环境验收工具 | 聊天落库、自动记忆提取、版本管理和主 Agent 注入仍待接通 |
 
-最近验收记录（2026-11-15）：前端 150 项通过，Lint、TypeScript 和构建通过；Python 475 项通过、221 项跳过，另有 5 个子测试通过；研究包 Mypy 检查 42 个源文件通过，已检查范围的 Ruff 通过。真实浏览器完成登录、流式回复、追问、停止、重试和布局验证。跳过项不算已执行，样例验证不代表生产容量；本次文档同步没有重新运行测试。
+本次提交前检查（2026-11-16）：前端 150 项通过，Lint、TypeScript 和构建通过；Python 475 项通过、221 项跳过，另有 5 个子测试通过；研究包 Mypy 检查 42 个源文件通过，已检查范围的 Ruff 通过。数据库/模型集成测试的跳过项不算已执行。2026-11-15 的真实浏览器登录、流式回复、追问、停止、重试和布局验证保留为独立历史记录；Memory 的真实环境样例见运行手册，均不代表生产容量已验收。
 
 详细范围见 [数据分析与多 Agent 方案第 27～29 节](docs/data-analysis-agent-design.md#27-四类数据工具执行交付2026-11-10待用户检查)、[模块职责](docs/architecture.md)和[本地网站启动说明](docs/operations.md#网站主-llm-聊天本地开发)。
 
@@ -218,15 +219,21 @@ uv run --all-extras --locked python python/tools/demo_rpc_failures.py --scenario
 
 ## 项目结构
 
-人工维护目录最多嵌套一层，按文件类型组织：
+采集包保持原有平铺结构；网站与研究包按职责分层，具体约定见模块职责说明：
 
 ```text
 python/
   chainscope/       业务 Python 代码
+  chainscope_research/ 独立研究应用、工具与合同
+  webapp/           网站账户、API 与聊天服务
   tests/            测试 Python 代码
   tools/            工具 Python 脚本
   migration_env/    Alembic 执行入口
   migrations/       迁移版本
+frontend/           React、TypeScript、Vite 前端与测试
+config/             非秘密业务配置
+prompts/            独立提示词正文
+deploy/             不含秘密的部署模板
 sql/                SQL 查询与历史初始迁移导出
 samples/            固定 CSV 样本
 reports/            样本来源；运行报告留在本地
@@ -236,6 +243,8 @@ raw/                可选调试归档，运行时创建，不提交
 ```
 
 当前说明见 [模块职责](docs/architecture.md)、[版本化迁移](docs/database-migrations.md)、[数据与文件保存](docs/data.md)、[运行手册](docs/operations.md)、[测试方法](docs/mysql-tests.md) 和 [Navicat 查询](docs/sql-queries.md)。[业务工程路线](docs/engineering-roadmap.md) 区分当前基线与后续目标；带日期的旧方案和学习记录保留其历史身份。
+
+代码注释约定：新增和修改的代码使用中文说明。文件头写清用途与职责；函数说明输入、输出和副作用；权限检查、事务边界、资源回收、状态转换及失败恢复等关键位置写明原因和限制。部署脚本、迁移和测试同样遵守，注释随实际逻辑一起维护，便于人工检查和讨论调整。
 
 ## 当前边界与后续工作
 
