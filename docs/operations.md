@@ -1,6 +1,6 @@
 # 运行与验收手册（本地采集与网站聊天）
 
-更新日期：2026-11-16（网站主 LLM 聊天及 Memory 基础设施准备）。Memory 小节记录本次实际部署和环境验证；聊天持久化、自动提取与主 Agent 注入仍待实现。采集操作与验收记录沿用原范围。命令在项目根目录的 PowerShell 执行。下文 `cs` 是 CLI 简写，可在当前终端定义：
+更新日期：2026-11-17（同步 Memory 目录与命令；环境部署记录为 2026-11-16）。Memory 小节记录实际部署和环境验证；聊天持久化、自动提取与主 Agent 注入仍待实现。采集操作与验收记录沿用原范围。命令在项目根目录的 PowerShell 执行。下文 `cs` 是 CLI 简写，可在当前终端定义：
 
 ```powershell
 function cs { & .\.venv\Scripts\python.exe -B -m chainscope @args }
@@ -40,16 +40,16 @@ npm run dev
 
 ## Memory 基础服务（2026-11-16 环境准备）
 
-已在 Ubuntu 虚拟机部署 Qdrant 1.20.1，官方镜像内容摘要固定在 `deploy/qdrant/compose.yaml`。服务仅发布 Linux 回环地址 6333，采用独立 CA、HTTPS 和读写分离 API Key，数据目录为 `/home/hadoop/chainscope-services/qdrant/storage`，快照目录为同级 `snapshots`。容器以 UID 1000 运行，限制为 2 vCPU、2 GiB；使用日志轮转和 `unless-stopped` 重启策略。
+已在 Ubuntu 虚拟机部署 Qdrant 1.20.1，官方镜像内容摘要固定在 `deploy/memory/qdrant/compose.yaml`。服务仅发布 Linux 回环地址 6333，采用独立 CA、HTTPS 和读写分离 API Key，数据目录为 `/home/hadoop/chainscope-services/qdrant/storage`，快照目录为同级 `snapshots`。容器以 UID 1000 运行，限制为 2 vCPU、2 GiB；使用日志轮转和 `unless-stopped` 重启策略。
 
 Windows 私有运行材料保存在 `%LOCALAPPDATA%/ChainScope/memory`，已限制目录 ACL。仓库不保存 CA 私钥、服务器私钥、真实 API Key 或数据目录。`connections.json` 保存开发机读取连接所需的私有参数；CA 私钥留在 Windows，未分发给容器。
 
-`python/tools/run_memory_tunnel.py` 由用户登录启动项通过项目 `pythonw.exe` 无窗口启动：Windows `127.0.0.1:6333` 转发到 Linux Qdrant；Linux `127.0.0.1:17890` 转发到 Windows 既有 `127.0.0.1:7890` 下载代理。转发进程使用已验证的 SSH 身份文件，独占运行、自动重连，日志有容量上限。Docker 的独立 systemd drop-in 使用该回环代理；没有把 Windows 代理开放到 LAN。
+`python/tools/memory/run_memory_tunnel.py` 的私有运行副本由用户登录启动项通过项目 `pythonw.exe` 无窗口启动：Windows `127.0.0.1:6333` 转发到 Linux Qdrant；Linux `127.0.0.1:17890` 转发到 Windows 既有 `127.0.0.1:7890` 下载代理。转发进程使用已验证的 SSH 身份文件，独占运行、自动重连，日志有容量上限。Docker 的独立 systemd drop-in 使用该回环代理；没有把 Windows 代理开放到 LAN。
 
 初次准备与部署入口如下，第二条在 Linux 终端执行。安装脚本需要 sudo，会应用 Docker 代理并在配置改变时重启 Docker，核对原有运行容器恢复情况，然后部署 Qdrant。PostgreSQL 保持 18.6，启动策略已调整为 auto；脚本不更新 PostgreSQL 软件包。
 
 ```powershell
-.\.venv\Scripts\python.exe -B python/tools/prepare_memory_environment.py
+.\.venv\Scripts\python.exe -B python/tools/memory/prepare_memory_environment.py
 ```
 
 ```bash
@@ -59,7 +59,7 @@ sudo bash /home/hadoop/chainscope-services/qdrant/install-linux.sh
 检索基础设施验收只使用随机命名的独立测试集合，结构检查使用合成向量，不代表真实语义模型效果：
 
 ```powershell
-.\.venv\Scripts\python.exe -B python/tools/check_memory_services.py prepare
+.\.venv\Scripts\python.exe -B python/tools/memory/check_memory_services.py prepare
 ```
 
 ```bash
@@ -67,23 +67,38 @@ sudo docker restart chainscope-memory-qdrant
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe -B python/tools/check_memory_services.py finish
+.\.venv\Scripts\python.exe -B python/tools/memory/check_memory_services.py finish
 ```
 
 本次通过：TLS 与匿名拒绝、只读 Key 写入拒绝、BM25 关键词检索、合成向量检索、RRF 融合、实体匹配、用户及状态过滤、容器重启后的点与索引读取。独立验收集合已清理；开发和测试集合为空，分别为 `chainscope_memory_dev_v1` 和 `chainscope_memory_test_v1`。转发子进程中断后的自动重连也已验证。
 
 PostgreSQL 的 development/test 已显式准备 `research` 和 `research_checkpoint` schema；checkpoint 由固定依赖版本的官方初始化器管理，运行账号不具备 DDL 权限。两套库的 checkpoint 写入、连接重建后读取及测试 thread 清理均通过。现有 Redis 两个实例通过证书校验、healthcheck 账号认证和 PING 检查。这些环境证据不代表网站已自动保存聊天或记忆。
 
-向量服务复用项目原有 `DASHSCOPE_API_KEY`，未安装 Ollama 或本地模型。`config/memory_services.yaml` 使用 `text-embedding-v4`、1024 维。本次发现原变量值前混入额外字符，验证原值中有效 Key 后仅清理多余前缀，未切换到另一把 Key；对应的北京业务空间 `DASHSCOPE_BASE_URL` 已保存到本地 `.env`。真实接口返回的维度与数值检查通过，并通过独立问题的真实向量召回、关键词检索及 RRF 融合验收，测试集合已清理。
+向量服务复用项目原有 `DASHSCOPE_API_KEY`，未安装 Ollama 或本地模型。`config/memory/services.yaml` 使用 `text-embedding-v4`、1024 维。本次发现原变量值前混入额外字符，验证原值中有效 Key 后仅清理多余前缀，未切换到另一把 Key；对应的北京业务空间 `DASHSCOPE_BASE_URL` 已保存到本地 `.env`。真实接口返回的维度与数值检查通过，并通过独立问题的真实向量召回、关键词检索及 RRF 融合验收，测试集合已清理。
 
 ```powershell
 # 填写真实百炼 API Host 后执行；只在验证成功后保存非秘密 Base URL。
-.\.venv\Scripts\python.exe -B python/tools/check_memory_embedding.py --base-url 'https://<业务空间ID>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1' --save-endpoint --verify-qdrant
+.\.venv\Scripts\python.exe -B python/tools/memory/check_memory_embedding.py --base-url 'https://<业务空间ID>.cn-beijing.maas.aliyuncs.com/compatible-mode/v1' --save-endpoint --verify-qdrant
 ```
 
 Qdrant SDK 1.20 的自动版本探测没有继承自定义 CA，曾产生探测警告；验收工具改为先用相同 CA 和认证显式核对固定版本，再关闭重复探测。实际服务版本 1.20.1 与固定镜像匹配。PostgreSQL 备份恢复和 Qdrant 快照恢复仍需后续演练；当前未实施生产高可用。业务记忆与网站持久化接线按后续实现步骤推进。
 
 2026-11-16 提交前补齐中文注释，明确各工具的输入输出、写入副作用、权限、事务边界、资源回收及失败清理。静态检查通过；全项目 Python 默认测试 475 项通过、221 项跳过，另有 5 个子测试通过；前端 150 项、Lint 和构建通过；研究包 Mypy 42 个源文件通过。前端标题用例改为等待 effect 的可观察结果，消除读取旧标题的时序问题；本轮注释修改未重新安装服务或调用云端模型。
+
+2026-11-17 将 Memory 工具、配置与部署模板分别归入各自的 `memory/` 目录，并建立研究包的 `memory/` 业务模块。仓库命令已同步；Linux 服务目录、Windows 私有材料及启动项使用的脚本副本继续沿用原路径。本次仅调整源码归类，没有执行环境准备、数据库初始化或真实模型调用。
+
+2026-11-17 第三步实施会话存储与独立 `mem0001` 迁移：开发和测试库已有会话、轮次、消息、摘要四表，迁移完成时业务行均为空。后续第四步已接入网页持久化：首次发送后 URL 为 `/chat/:conversationId`，可刷新恢复、选择历史、停止与删除。迁移命令与账户外键前提见 [版本化迁移](database-migrations.md#memory-会话业务迁移)。
+
+持久化参数维护在 `config/memory/runtime.yaml`，每项附中文单位与用途。修改后重启后端，正在运行的配置快照不会热更新；凭证仍只在 `.env`。共享 SSE/实例限流继续维护在 `config/web_chat.yaml`，模型参数维护在研究配置，三处不重复定义同一个参数。
+
+浏览器通过新 Memory API 读取历史；旧 `/api/chat/turn` 仅保留兼容协议。当前尚无自动摘要与长期记忆提取，超过上下文上限会提示新建对话。关闭页面停止生成，已提交正文可恢复；无心跳轮次按 YAML 水位在下一次访问时收尾。
+
+针对性验证命令如下，仅操作测试库中随机创建的测试账号；夹具不自动执行迁移，先确保测试账户迁移与 Memory 迁移均在 head。测试结束按随机 UUID 清理数据，不删除 schema 或已有账号。
+
+```powershell
+$env:CHAINSCOPE_TEST_POSTGRES = '1'
+.\.venv\Scripts\python.exe -m pytest -q python/tests/research/memory
+```
 
 ## 本地采集 Agent
 

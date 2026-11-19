@@ -19,8 +19,58 @@ from webapp.db.tables import TABLES
 OWNED = {*TABLES, "alembic_version"}
 
 
+@pytest.fixture(scope="module")
+def account_memory_dependency():
+    """账户重建测试先处理 Memory 用户外键，模块结束后恢复原有空表环境。
+
+    只处理测试库中已知版本且完全为空的 Memory 表；任何业务行或未知版本都拒绝清理。
+    账户迁移本身不修改，回退顺序按 Memory → 账户，恢复顺序按账户 → Memory。
+    """
+    if os.environ.get("CHAINSCOPE_TEST_POSTGRES") != "1":
+        yield
+        return
+    from chainscope_research.memory.storage.database import (
+        migration_config as memory_config,
+    )
+
+    profile = load_profile("test")
+    migrator = engine_for(profile, "migrator")
+    revision = None
+    try:
+        with migrator.connect() as connection:
+            if sa.inspect(connection).has_table(
+                "memory_alembic_version", schema="research"
+            ):
+                revision = connection.scalar(
+                    sa.text("SELECT version_num FROM research.memory_alembic_version")
+                )
+            if revision:
+                if revision != "mem0001":
+                    pytest.fail("测试库 Memory 版本超出账户夹具已知范围，未清理")
+                for table in (
+                    "conversations",
+                    "conversation_turns",
+                    "conversation_messages",
+                    "conversation_summaries",
+                ):
+                    if connection.scalar(
+                        sa.text(f"SELECT count(*) FROM research.{table}")
+                    ):
+                        pytest.fail("测试库 Memory 表含数据，拒绝账户重建测试")
+        if revision:
+            command.downgrade(memory_config("test"), "base")
+        try:
+            yield
+        finally:
+            if revision:
+                command.upgrade(migration_config("test"), "head")
+                command.upgrade(memory_config("test"), revision)
+    finally:
+        migrator.dispose()
+
+
 @pytest.fixture
-def test_db():
+def test_db(account_memory_dependency):
     """真实测试库：先确认库里没有别的表，再回退为空、升级到最新；测试结束后再回退为空。
 
     返回 (配置, 迁移账号连接池, 运行账号连接池)。业务代码只用运行账号。

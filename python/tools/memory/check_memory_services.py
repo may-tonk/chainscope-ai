@@ -18,7 +18,8 @@ import yaml
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-ROOT = Path(__file__).resolve().parents[2]
+# 工具归入 python/tools/memory 后，根目录需要再向上一层；不依赖当前工作目录。
+ROOT = Path(__file__).resolve().parents[3]
 RUNTIME = Path(os.environ["LOCALAPPDATA"]) / "ChainScope/memory"
 PROBE = RUNTIME / "environment-probe.json"
 
@@ -35,7 +36,7 @@ def client(write=True):
     # SDK 1.20 的后台版本探测不传递自定义 CA/trust_env，私有 CA 会产生误报警。
     # 先以完全相同的 TLS 与认证参数核对固定版本，再关闭 SDK 的重复探测。
     expected = yaml.safe_load(
-        (ROOT / "config/memory_services.yaml").read_text(encoding="utf-8")
+        (ROOT / "config/memory/services.yaml").read_text(encoding="utf-8")
     )["qdrant"]["server_version"]
     with httpx.Client(verify=context, trust_env=False, timeout=20) as transport:
         response = transport.get(values["qdrant_url"] + "/", headers={"api-key": key})
@@ -293,7 +294,7 @@ def main():
     connection = None
     try:
         settings = yaml.safe_load(
-            (ROOT / "config/memory_services.yaml").read_text(encoding="utf-8")
+            (ROOT / "config/memory/services.yaml").read_text(encoding="utf-8")
         )
         connection = client()
         result = (

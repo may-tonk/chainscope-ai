@@ -3,6 +3,7 @@
 使用现有 development/test 配置及其迁移账号，继续校验目标库、TLS 和最小权限。
 只有传入 --apply 才执行 DDL；业务记忆表由后续独立迁移创建。
 此命令会改变 schema、授权和 checkpoint 内部表，不能作为只读健康检查执行。
+本文件归入 python/tools/memory；环境初始化入口与后续 Memory 业务迁移职责分开。
 """
 
 import argparse

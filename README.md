@@ -13,8 +13,8 @@
 | 采集 CLI 与本地 Agent | 固定范围采集、事务入库、连续水位、恢复及结束报告 | 单机本地操作者；规模验收以实际记录为准 |
 | 四类研究工具 | 交易/区块事件查询、地址/代币活动分析；授权接口、精确计算和证据引用 | 执行层已实现，尚未由网页和专业 subagent 调用 |
 | 网站账户 | 注册、登录、密码相关操作、会话与账户设置 | 开发邮件为控制台模式；生产邮件与生产账户库装配未完成 |
-| 网页主 LLM 聊天 | 真实 SSE 正文、多轮追问、停止、打断与手动重试；已调整聊天布局 | 仅当前页面保留对话；研究分派仍为 `not_connected` |
-| Memory 基础设施 | Qdrant 关键词/向量混合检索、DashScope 向量接口、PostgreSQL checkpoint 表与环境验收工具 | 聊天落库、自动记忆提取、版本管理和主 Agent 注入仍待接通 |
+| 网页主 LLM 聊天 | 真实 SSE、多轮追问、停止、持久会话、历史选择与刷新恢复；正文先落库后交付 | 自动摘要和长期记忆尚未接入；研究分派仍为 `not_connected` |
+| Memory 基础 | 已有环境、合同、会话存储和网页接线；运行参数由 `config/memory/runtime.yaml` 校验注入，数据库版本为 `mem0001` | 自动摘要、长期记忆提取、索引同步和召回注入仍待完成 |
 
 本次提交前检查（2026-11-16）：前端 150 项通过，Lint、TypeScript 和构建通过；Python 475 项通过、221 项跳过，另有 5 个子测试通过；研究包 Mypy 检查 42 个源文件通过，已检查范围的 Ruff 通过。数据库/模型集成测试的跳过项不算已执行。2026-11-15 的真实浏览器登录、流式回复、追问、停止、重试和布局验证保留为独立历史记录；Memory 的真实环境样例见运行手册，均不代表生产容量已验收。
 
@@ -243,6 +243,8 @@ raw/                可选调试归档，运行时创建，不提交
 ```
 
 当前说明见 [模块职责](docs/architecture.md)、[版本化迁移](docs/database-migrations.md)、[数据与文件保存](docs/data.md)、[运行手册](docs/operations.md)、[测试方法](docs/mysql-tests.md) 和 [Navicat 查询](docs/sql-queries.md)。[业务工程路线](docs/engineering-roadmap.md) 区分当前基线与后续目标；带日期的旧方案和学习记录保留其历史身份。
+
+Memory 按模块归类：业务代码在 `python/chainscope_research/memory/`，网站适配在 `python/webapp/api/memory/` 和 `services/memory/`，前端持久聊天在 `frontend/src/features/memory/`。辅助工具在 `python/tools/memory/`，配置在 `config/memory/`，部署材料在 `deploy/memory/`；提示词与测试也按 `memory/` 归类。具体职责及当前状态见 [模块职责](docs/architecture.md#memory-第四步运行配置与网页持久聊天接线)。
 
 代码注释约定：新增和修改的代码使用中文说明。文件头写清用途与职责；函数说明输入、输出和副作用；权限检查、事务边界、资源回收、状态转换及失败恢复等关键位置写明原因和限制。部署脚本、迁移和测试同样遵守，注释随实际逻辑一起维护，便于人工检查和讨论调整。
 

@@ -1,6 +1,6 @@
 # 数据库迁移
 
-更新日期：2026-11-16（账户迁移说明与 Memory 基础设施初始化）。当前采集 MySQL 迁移脚本最新为 `0009`，网站 PostgreSQL 账户迁移脚本最新为 `0002`；本次没有执行或修改这两套迁移链。Memory 小节记录实际执行的独立 schema 与 checkpoint 初始化。Navicat 继续用于查看和核对。
+更新日期：2026-11-17（Memory 会话业务迁移 mem0001）。采集 MySQL 最新为 `0009`，网站 PostgreSQL 账户最新为 `0002`；Memory 独立使用 `research.memory_alembic_version`，schema/checkpoint 准备记录为 2026-11-16。Navicat 继续用于查看和核对。
 
 ## 执行入口
 
@@ -38,19 +38,38 @@
 | `0001` | `app_users`、`auth_challenges`、`auth_sessions`、`auth_rate_limits`、`auth_events` 五张账户/认证表 |
 | `0002` | 验证表增加密码重置用途、关联用户、外键/用途约束和索引 |
 
-账户迁移使用独立迁移账号；普通运行账号用于网站日常读写。已实现的迁移入口检查目标库、账号、schema 权限与 TLS，拒绝超级管理员；账户 downgrade 仅允许测试库。网站启动不自动建表或升级，生产账户库装配与部署仍未完成。账户迁移不放入 `python/migrations/0001`～`0009`，也不代表研究会话、报告或任务已有迁移；研究业务迁移仍预留。
+账户迁移使用独立迁移账号；普通运行账号用于网站日常读写。已实现的迁移入口检查目标库、账号、schema 权限与 TLS，拒绝超级管理员；账户 downgrade 仅允许测试库。网站启动不自动建表或升级，生产账户库装配与部署仍未完成。账户迁移不放入 `python/migrations/0001`～`0009`；Memory 会话迁移见下文，报告与任务迁移仍待实施。
 
 ## Memory 基础设施初始化
 
-`python/tools/prepare_memory_database.py --apply` 是独立的显式环境准备入口，使用现有 development/test profile 及各自迁移账号，校验目标库、非超级用户和 TLS 后创建 `research`、`research_checkpoint` 两个 schema。已有 schema 的所有者不匹配时拒绝接管。运行账号仅取得 schema USAGE、业务表读写与必要序列权限，不取得 CREATE 权限。
+`python/tools/memory/prepare_memory_database.py --apply` 是独立的显式环境准备入口，使用现有 development/test profile 及各自迁移账号，校验目标库、非超级用户和 TLS 后创建 `research`、`research_checkpoint` 两个 schema。已有 schema 的所有者不匹配时拒绝接管。运行账号仅取得 schema USAGE、业务表读写与必要序列权限，不取得 CREATE 权限。
 
-`research` 暂为空，聊天与记忆业务表仍待后续独立 Alembic 迁移；`research_checkpoint` 使用锁定的 `langgraph-checkpoint-postgres 3.2.0` 官方 `PostgresSaver.setup()` 显式初始化，其 `checkpoint_migrations` 与账户 `public.alembic_version` 独立。内部并发索引迁移使用独立 autocommit 连接，不放进聊天业务事务，网站启动不调用 setup。
+2026-11-16 初始化后 `research` 为空；2026-11-17 的会话表由下述 Memory 迁移创建。`research_checkpoint` 使用锁定的 `langgraph-checkpoint-postgres 3.2.0` 官方 `PostgresSaver.setup()` 显式初始化，其 `checkpoint_migrations` 与账户 `public.alembic_version` 独立。内部并发索引迁移使用独立 autocommit 连接，不放进聊天业务事务，网站启动不调用 setup。
 
 ```powershell
-.\.venv\Scripts\python.exe -B python/tools/prepare_memory_database.py --apply
+.\.venv\Scripts\python.exe -B python/tools/memory/prepare_memory_database.py --apply
 ```
 
 2026-11-16 已在开发、测试两套库执行，运行账号的检查点写入、关闭连接后重新读取和测试 thread 清理通过，DDL 权限保持 false。未升级 PostgreSQL（仍为 18.6），未安装 pgvector，未修改 MySQL 原始事实或账户表结构。
+
+2026-11-17 先完成工具归类，随后实施 Memory 业务迁移，未重跑 schema/checkpoint 初始化。
+
+## Memory 会话业务迁移
+
+`alembic.ini` 的 `[memory]` 入口指向 `python/chainscope_research/memory/migrations/`，版本表为 `research.memory_alembic_version`。`mem0001` 创建 `conversations`、`conversation_turns`、`conversation_messages`、`conversation_summaries` 四表；用户外键依赖已存在的 `public.app_users`。版本脚本固定 DDL，不导入会随业务变化的列映射。
+
+```powershell
+# 可先生成 SQL 审阅；升级显式执行，网站启动不迁移。
+.\.venv\Scripts\python.exe -m alembic -n memory upgrade head --sql
+.\.venv\Scripts\python.exe -m alembic -n memory -x profile=test upgrade head
+.\.venv\Scripts\python.exe -m alembic -n memory upgrade head
+```
+
+迁移连接核对真实库、账号、TLS、schema 所有者和账户表前提，并使用事务级锁防止两个迁移同时执行。运行账号可以读写业务表、读取版本表，没有 schema CREATE 或版本表写权限。破坏性回退只允许 test profile，不能在开发库执行。
+
+开发与测试库均已升级至 `mem0001`，业务表当前均为空。测试库原先没有账户表，本步先应用既有账户迁移至 `0002`；开发账户迁移及 checkpoint 初始化未重跑。真实 PostgreSQL 验证覆盖重复升级、并发发送、用户隔离、片段幂等、终态回滚、外键和级联删除，随机测试账号及会话均已清理。
+
+账户重建测试的夹具已处理跨 schema 外键依赖：只在测试库已知 Memory 版本且四表无数据时，按 Memory → 账户顺序回退，结束后按账户 → Memory 顺序恢复。有业务行或未知版本时拒绝清理，不使用 DROP SCHEMA CASCADE。
 
 ## 保留与兼容
 

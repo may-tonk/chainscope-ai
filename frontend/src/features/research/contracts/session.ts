@@ -127,6 +127,7 @@ export interface ChatEvent {
   session_id: string;
   turn_id: string;
   sequence: number;
+  request_revision?: number;
   payload: ChatPayload;
 }
 export interface ChatInput {

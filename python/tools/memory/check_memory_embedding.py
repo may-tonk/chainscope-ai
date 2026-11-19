@@ -22,7 +22,8 @@ from check_memory_services import ensure_collection, scope
 from dotenv import dotenv_values
 from qdrant_client import models
 
-ROOT = Path(__file__).resolve().parents[2]
+# 本文件与检索校验工具同处 python/tools/memory；从文件位置定位仓库配置。
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def verify_retrieval(vectors, documents):
@@ -153,7 +154,7 @@ def main():
         # 不展开 ${...}，避免凭证中意外包含的字符被当作环境变量替换。
         values = {**dotenv_values(ROOT / ".env", interpolate=False), **os.environ}
         settings = yaml.safe_load(
-            (ROOT / "config/memory_services.yaml").read_text(encoding="utf-8")
+            (ROOT / "config/memory/services.yaml").read_text(encoding="utf-8")
         )["embedding"]
         key = (values.get(settings["api_key_env"]) or "").strip()
         base = (

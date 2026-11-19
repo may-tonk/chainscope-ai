@@ -1,4 +1,5 @@
 # 用途：单节点 Memory 检索服务；正文全文索引与向量索引在集合初始化时显式创建。
+# 与同目录 Compose 模板一起分发，仓库归类不改变容器内部的数据和证书路径。
 log_level: INFO
 telemetry_disabled: true
 storage:

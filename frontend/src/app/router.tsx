@@ -22,7 +22,7 @@ import { RegisterPage } from "../features/auth/pages/RegisterPage";
 import { ResetPasswordPage } from "../features/auth/pages/ResetPasswordPage";
 import { GuestOnly, RequireAuth } from "../features/auth/session/guards";
 import { ResearchSessionRoute } from "../features/research/pages/ResearchSessionRoute";
-import { ChatRoute } from "../features/research/pages/ChatPage";
+import { ChatRoute } from "../features/memory/PersistentChatRoute";
 import { ResearchHomeRoute } from "./ResearchHomeRoute";
 import { AppLayout } from "./layouts/AppLayout";
 import { AuthLayout } from "./layouts/AuthLayout";
@@ -72,6 +72,11 @@ export const routes: RouteObject[] = [
             path: "/research/new",
             element: <ChatRoute />,
             handle: { title: "AI 对话", layout: "chat" } satisfies RouteHandle,
+          },
+          {
+            path: "/chat/:conversationId",
+            element: <ChatRoute />,
+            handle: { title: "历史对话", layout: "chat" } satisfies RouteHandle,
           },
           {
             path: "/research/:sessionId",

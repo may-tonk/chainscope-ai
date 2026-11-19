@@ -1,4 +1,5 @@
 # 用途：仅部署 ChainScope Memory 的 Qdrant，凭证和数据保存在 Linux 服务目录。
+# 本模板归入 deploy/memory/qdrant；安装后仍以服务目录为相对挂载根目录。
 # 端口绑定 Linux 回环地址，由受校验的 SSH 转发提供给 Windows 开发进程。
 name: chainscope-memory
 

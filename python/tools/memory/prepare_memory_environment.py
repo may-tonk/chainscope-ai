@@ -19,7 +19,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-ROOT = Path(__file__).resolve().parents[2]
+# 本文件位于 python/tools/memory，向上三层定位仓库根，不依赖启动时的工作目录。
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def write_private(path, data):
@@ -172,10 +173,11 @@ def main():
         "zz-chainscope-memory-proxy.conf",
     ):
         # 统一 LF，避免 PowerShell/SSH 与 Linux shell 的换行差异。
-        content = (ROOT / "deploy/qdrant" / name).read_text(encoding="utf-8")
+        content = (ROOT / "deploy/memory/qdrant" / name).read_text(encoding="utf-8")
         (runtime / "qdrant" / name).write_text(content, encoding="utf-8", newline="\n")
+    # 同目录读取转发脚本；私有运行副本路径保持稳定，登录启动项可继续使用。
     shutil.copyfile(
-        ROOT / "python/tools/run_memory_tunnel.py", runtime / "run_memory_tunnel.py"
+        Path(__file__).with_name("run_memory_tunnel.py"), runtime / "run_memory_tunnel.py"
     )
     # 只打印路径和布尔状态；私钥和连接字典不能整体进入日志或提交记录。
     print(

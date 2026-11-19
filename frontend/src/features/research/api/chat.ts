@@ -77,6 +77,7 @@ export function parseChatEvent(text: string): ChatEvent {
     session_id: event.session_id,
     turn_id: event.turn_id,
     sequence: event.sequence as number,
+    ...(Number.isSafeInteger(event.request_revision) && (event.request_revision as number) > 0 ? { request_revision: event.request_revision as number } : {}),
     payload: p as ChatPayload,
   };
 }
@@ -88,6 +89,15 @@ export async function streamChat(
   receive: (event: ChatEvent) => void
 ): Promise<void> {
   const response = await apiStreamRequest("/api/chat/turn", input, signal);
+  return consumeChatResponse(response, signal, receive);
+}
+
+/** 共用 SSE 解析与序号校验；持久聊天只更换请求合同及地址，不复制协议解析。 */
+export async function consumeChatResponse(
+  response: Response,
+  signal: AbortSignal,
+  receive: (event: ChatEvent) => void
+): Promise<void> {
   if (
     !response.headers.get("Content-Type")?.includes("text/event-stream") ||
     !response.body

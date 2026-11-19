@@ -14,7 +14,9 @@
    任何错误都不回显用户输入、不暴露服务器内部信息。
 """
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -23,7 +25,16 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from chainscope_research.memory.settings import load_memory_settings
+from chainscope_research.memory.storage.conversations import (
+    ConversationStore,
+    MemoryStoreError,
+)
+from chainscope_research.memory.storage.database import engine_for as memory_engine_for
+from chainscope_research.memory.storage.database import require_identity
+
 from .api.dependencies import WebContext
+from .api.memory.routes import router as memory_router
 from .api.routes_auth import router as auth_router
 from .api.routes_chat import router as chat_router
 from .api.routes_password_reset import router as password_reset_router
@@ -50,6 +61,7 @@ from .core.mailer import mailer_for
 from .core.settings import load_profile
 from .db.database import engine_for
 from .services.chat import ChatService
+from .services.memory.chat import PersistentChatService
 
 log = logging.getLogger("webapp")
 
@@ -96,26 +108,74 @@ def create_app(
     config: AppConfig | None = None,
     mailer=None,
     chat_application=None,
+    memory_store=None,
+    memory_settings=None,
 ) -> FastAPI:
     """创建网站后端。参数都不传时从 .env 读取；测试时传入测试库、临时密钥等。"""
     config = config or load_app_config()
     keys = keys or load_keys()
+    owns_engine = engine is None
+    profile = None
     if engine is None:
         if config.is_production:
             # 生产环境的数据库配置在部署阶段增加，现在不允许用开发库冒充。
             raise ConfigError("生产环境的账户库配置尚未实现")
-        engine = engine_for(load_profile("development"))
+        profile = load_profile("development")
+        engine = engine_for(profile)
     mailer = mailer or mailer_for(config)
+
+    @asynccontextmanager
+    async def lifespan(application):
+        """退出时等待持久写入并释放本工厂拥有的池；注入测试池由调用方管理。"""
+        try:
+            yield
+        finally:
+            await application.state.memory_chat.close()
+            if owns_engine:
+                if memory_engine is not None:
+                    await asyncio.to_thread(memory_engine.dispose)
+                await asyncio.to_thread(engine.dispose)
 
     app = FastAPI(
         title="ChainScope Web API",
         docs_url="/docs" if config.docs_enabled else None,
         redoc_url=None,
         openapi_url="/openapi.json" if config.docs_enabled else None,
+        lifespan=lifespan,
     )
     app.state.webapp = WebContext(engine, keys, config, mailer)
     # 独立聊天资源不读取用户历史、不运行研究工具，也不在启动时调用模型。
     app.state.chat = ChatService(load_chat_settings(), chat_application)
+    settings = memory_settings or load_memory_settings()
+    memory_engine = None
+    initializer = None
+    if memory_store is None and hasattr(engine, "dialect"):
+        memory_engine = (
+            memory_engine_for(profile, settings=settings) if owns_engine else engine
+        )
+        memory_store = ConversationStore(memory_engine, settings=settings)
+        if profile is not None:
+
+            def initialize_memory():
+                """首次使用只检查身份和版本，不自动创建或升级结构。"""
+                from sqlalchemy import text
+
+                with memory_engine.connect() as connection:
+                    require_identity(connection, profile)
+                    if (
+                        connection.scalar(
+                            text(
+                                "SELECT version_num FROM research.memory_alembic_version"
+                            )
+                        )
+                        != "mem0001"
+                    ):
+                        raise MemoryStoreError("DATABASE_FAILURE")
+
+            initializer = initialize_memory
+    app.state.memory_chat = PersistentChatService(
+        memory_store, settings, app.state.chat, initializer
+    )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(config.allowed_hosts))
 
     @app.middleware("http")
@@ -166,6 +226,37 @@ def create_app(
         log.error("account database error %s (SQLSTATE %s)", type(exc).__name__, state)
         return _error(request, 503, "service_unavailable", "服务暂时不可用，请稍后再试")
 
+    @app.exception_handler(MemoryStoreError)
+    async def memory_error(request: Request, exc: MemoryStoreError):
+        """Memory 错误只映射稳定代码，资源不存在与不属于当前用户使用相同响应。"""
+        status, code, message = {
+            "NOT_FOUND": (404, "conversation_not_found", "会话不存在或不可访问。"),
+            "REVISION_CONFLICT": (
+                409,
+                "conversation_changed",
+                "会话已更新，请刷新后重试。",
+            ),
+            "IDEMPOTENCY_CONFLICT": (
+                409,
+                "request_conflict",
+                "请求编号已被不同内容使用。",
+            ),
+            "TURN_ALREADY_RUNNING": (
+                409,
+                "turn_running",
+                "该轮回复正在生成，请查看历史。",
+            ),
+            "CHAT_BUSY": (429, "chat_busy", "当前回复较多，请稍后重试。"),
+            "HISTORY_TOO_LARGE": (
+                400,
+                "chat_history_too_large",
+                "当前会话超过上下文上限，请新建对话。",
+            ),
+            "INVALID_INPUT": (400, "invalid_request", "请求参数不正确。"),
+            "STALE_TURN": (409, "turn_changed", "该轮回复已结束或被新问题取代。"),
+        }.get(exc.code, (503, "memory_unavailable", "对话存储暂时不可用，请稍后重试。"))
+        return _error(request, status, code, message)
+
     @app.exception_handler(Exception)
     async def unexpected(request: Request, exc: Exception):
         """兜底：任何没预料到的错误都返回 500 和固定提示，不把内部细节暴露给浏览器。"""
@@ -175,4 +266,5 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(password_reset_router)
     app.include_router(chat_router)
+    app.include_router(memory_router)
     return app

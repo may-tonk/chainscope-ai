@@ -7,11 +7,22 @@ import { ResearchMessages } from "../components/ResearchMessages";
 import { SessionComposer } from "../components/SessionComposer";
 import { TimeRangeDialog } from "../components/TimeRangeDialog";
 import type { SessionDraft, SessionMessage } from "../contracts/session";
+import type { ChatTurn } from "../contracts/session";
 import { useChat } from "../hooks/useChat";
 import { readOwnedDraft } from "../state/sessionState";
 import styles from "./ChatPage.module.css";
 
 const EMPTY: SessionDraft = { question: "", objects: [], time: null };
+
+/** 页面只依赖显示状态，持久控制器和旧协议验证控制器均可复用同一布局。 */
+export interface ChatPageController {
+  turns: readonly Pick<ChatTurn, "id" | "question" | "answer" | "status" | "dispatchPending" | "error">[];
+  streaming: boolean;
+  loading?: boolean;
+  send(question: string): void;
+  stop(): void;
+  retry(): void;
+}
 
 /** 切换账户或新建同路径对话时重建状态，不继承私人文本。 */
 export function ChatRoute() {
@@ -48,10 +59,13 @@ function questionText(draft: SessionDraft): string {
 /** 请求状态来自 SSE；停止或离页时取消当前连接，不创建持久历史会话。 */
 export function ChatPage({
   initialDraft = EMPTY,
+  controller,
 }: {
   initialDraft?: SessionDraft;
+  controller?: ChatPageController;
 }) {
-  const chat = useChat();
+  const local = useChat();
+  const chat = controller ?? local;
   const [draft, setDraft] = useState(initialDraft);
   const [timeOpen, setTimeOpen] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
@@ -160,9 +174,9 @@ export function ChatPage({
             <ArrowDown size={18} aria-hidden="true" />
           </button>
         )}
-        {last?.status === "failed" && (
+        {(last?.status === "failed" || (controller && last?.status === "stopped")) && (
           <div className={styles.error}>
-            <p role="alert">{last.error}</p>
+            {last?.error && <p role="alert">{last.error}</p>}
             <button
               type="button"
               onClick={() => {
@@ -170,7 +184,7 @@ export function ChatPage({
                 chat.retry();
               }}
             >
-              重试本轮回复
+              {controller ? "重新回答此问题" : "重试本轮回复"}
             </button>
           </div>
         )}
@@ -178,7 +192,7 @@ export function ChatPage({
           variant="chat"
           draft={draft}
           onChange={setDraft}
-          enabled
+          enabled={!controller?.loading}
           busy={false}
           streaming={chat.streaming}
           onStop={chat.stop}
@@ -200,7 +214,7 @@ export function ChatPage({
               ? "已停止接收本轮回复"
               : ""}
           </span>
-          <span>对话仅保留在当前页面</span>
+          <span>{controller ? "对话保存到你的账户 · 离页停止生成" : "对话仅保留在当前页面"}</span>
         </div>
       </div>
       {timeOpen && (

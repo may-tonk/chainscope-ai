@@ -1,5 +1,6 @@
 #!/bin/bash
 # 用途：在已准备的服务目录部署 Qdrant；由用户在 Linux 终端以 sudo 显式执行。
+# 仓库模板位于 deploy/memory/qdrant；Linux 服务安装位置沿用既有目录。
 # 只调整 Docker 下载代理并部署本服务，启用现有 PostgreSQL 自动启动，不升级软件包。
 # 输入是固定服务目录中的部署材料；输出是运行状态，失败返回非零码。
 # 本脚本会影响整个 Docker 服务的下载代理，首次应用代理时重启 Docker；不是只读检查。

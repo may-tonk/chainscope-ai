@@ -1,0 +1,23 @@
+# Memory 非秘密运行参数；由 Pydantic 严格校验，修改后重启后端生效。
+# 用户消息、运行状态、密钥不写入此文件；数据库身份仍来自现有 .env profile。
+database:
+  pool_size: 5                  # 单个连接池最多保留的连接数。
+  max_overflow: 5               # 忙时临时增加的连接数，不是全站总上限。
+  pool_timeout_seconds: 10      # 等待空闲连接的上限。
+  connect_timeout_seconds: 5    # 建立数据库连接的上限。
+  statement_timeout_ms: 10000   # 单条数据库语句执行上限，单位毫秒。
+  lock_timeout_ms: 5000         # 等待数据库锁的上限，不得超过语句上限。
+history:
+  title_characters: 48          # 由首条问题生成标题时保留的字符数，结构上限为 160。
+  poll_seconds: 2               # 读取到未结束轮次时的前端刷新间隔，由 API 返回给页面。
+  page_size: 100                # 页面每批读取的消息数量。
+  max_page_size: 500            # 对外分页请求允许的最大数量。
+  max_context_messages: 100     # 摘要接入前的完整上下文上限，超过明确拒绝，不静默截断。
+stream:
+  flush_characters: 512         # 累积到此字符数立即落库并交付正文。
+  flush_interval_seconds: 0.25  # 未达到字符水位时也按此间隔落库。
+  cleanup_timeout_seconds: 5    # 断连后的状态收尾等待上限。
+  database_parallelism: 10      # 当前实例实际数据库线程操作的并发上限。
+recovery:
+  heartbeat_seconds: 10         # 即使模型暂无正文，也更新运行轮次心跳。
+  stale_after_seconds: 60       # 超过该时间无心跳的轮次标记为进程中断，保留已存正文。
